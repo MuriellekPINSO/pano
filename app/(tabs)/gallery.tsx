@@ -9,6 +9,7 @@ import {
     Alert,
     Dimensions,
     FlatList,
+    Image,
     Platform,
     StyleSheet,
     Text,
@@ -43,12 +44,12 @@ export default function GalleryScreen() {
     const handleDelete = useCallback(
         (project: PanoramaProject) => {
             Alert.alert(
-                'Delete Panorama',
-                `Are you sure you want to delete "${project.name}"?`,
+                'Supprimer le panorama',
+                `Êtes-vous sûr de vouloir supprimer "${project.name}" ?`,
                 [
-                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Annuler', style: 'cancel' },
                     {
-                        text: 'Delete',
+                        text: 'Supprimer',
                         style: 'destructive',
                         onPress: () => deleteProject(project.id),
                     },
@@ -66,9 +67,19 @@ export default function GalleryScreen() {
         [setCurrentProject, router]
     );
 
+    // Get the first captured photo URI as thumbnail
+    const getThumbnailUri = (project: PanoramaProject): string | null => {
+        if (project.panoramaUri) return project.panoramaUri;
+        if (project.thumbnailUri) return project.thumbnailUri;
+        const firstCaptured = project.positions.find(p => p.captured && p.uri);
+        return firstCaptured?.uri || null;
+    };
+
     const renderProjectCard = useCallback(
         ({ item, index }: { item: PanoramaProject; index: number }) => {
             const progress = item.capturedPhotos / item.totalPhotos;
+            const thumbnailUri = getThumbnailUri(item);
+            const timeSince = getTimeSince(item.updatedAt || item.createdAt);
 
             return (
                 <Animated.View
@@ -80,7 +91,6 @@ export default function GalleryScreen() {
                         style={styles.card}
                         onPress={() => {
                             if (item.isComplete) {
-                                // View panorama
                                 setCurrentProject(item);
                                 router.push('/viewer');
                             } else {
@@ -98,16 +108,29 @@ export default function GalleryScreen() {
                             }
                             style={styles.cardGradient}
                         >
-                            {/* Thumbnail / Icon */}
+                            {/* Thumbnail */}
                             <View style={styles.thumbnailContainer}>
-                                <MaterialIcons
-                                    name={item.isComplete ? 'panorama' : 'panorama-horizontal-select'}
-                                    size={48}
-                                    color={item.isComplete ? '#10B981' : '#6C63FF'}
-                                />
+                                {thumbnailUri ? (
+                                    <Image
+                                        source={{ uri: thumbnailUri }}
+                                        style={styles.thumbnailImage}
+                                        resizeMode="cover"
+                                    />
+                                ) : (
+                                    <MaterialIcons
+                                        name={item.isComplete ? 'panorama' : 'panorama-horizontal-select'}
+                                        size={48}
+                                        color={item.isComplete ? '#10B981' : '#6C63FF'}
+                                    />
+                                )}
                                 {item.isComplete && (
                                     <View style={styles.completeBadge}>
                                         <MaterialIcons name="check" size={12} color="#FFFFFF" />
+                                    </View>
+                                )}
+                                {!item.isComplete && item.capturedPhotos > 0 && (
+                                    <View style={styles.inProgressBadge}>
+                                        <MaterialIcons name="pause" size={10} color="#FFFFFF" />
                                     </View>
                                 )}
                             </View>
@@ -117,11 +140,7 @@ export default function GalleryScreen() {
                                 {item.name}
                             </Text>
                             <Text style={styles.cardDate}>
-                                {new Date(item.createdAt).toLocaleDateString('fr-FR', {
-                                    day: 'numeric',
-                                    month: 'short',
-                                    year: 'numeric',
-                                })}
+                                {timeSince}
                             </Text>
 
                             {/* Progress */}
@@ -143,15 +162,21 @@ export default function GalleryScreen() {
                             </View>
 
                             {/* Action */}
-                            <View style={styles.cardAction}>
-                                <Text style={styles.cardActionText}>
-                                    {item.isComplete ? 'View' : 'Resume'}
-                                </Text>
+                            <View style={[
+                                styles.cardAction,
+                                item.isComplete && styles.cardActionComplete,
+                            ]}>
                                 <MaterialIcons
-                                    name={item.isComplete ? 'visibility' : 'play-arrow'}
+                                    name={item.isComplete ? '360' : 'play-arrow'}
                                     size={16}
                                     color={item.isComplete ? '#10B981' : '#6C63FF'}
                                 />
+                                <Text style={[
+                                    styles.cardActionText,
+                                    item.isComplete && { color: '#10B981' },
+                                ]}>
+                                    {item.isComplete ? 'Voir en 360°' : 'Reprendre'}
+                                </Text>
                             </View>
                         </LinearGradient>
                     </TouchableOpacity>
@@ -174,13 +199,13 @@ export default function GalleryScreen() {
                         entering={FadeInDown.duration(600)}
                         style={styles.title}
                     >
-                        Gallery
+                        Mes Panoramas
                     </Animated.Text>
                     <Animated.Text
                         entering={FadeInDown.delay(200).duration(600)}
                         style={styles.subtitle}
                     >
-                        {state.projects.length} panorama{state.projects.length !== 1 ? 's' : ''}
+                        {state.projects.length} panorama{state.projects.length !== 1 ? 's' : ''} · {state.projects.filter(p => p.isComplete).length} terminé{state.projects.filter(p => p.isComplete).length !== 1 ? 's' : ''}
                     </Animated.Text>
                 </View>
 
@@ -195,13 +220,20 @@ export default function GalleryScreen() {
                             style={[styles.filterButton, filter === f && styles.filterButtonActive]}
                             onPress={() => setFilter(f)}
                         >
+                            <MaterialIcons
+                                name={f === 'all' ? 'grid-view' : f === 'complete' ? 'check-circle' : 'pending'}
+                                size={14}
+                                color={filter === f ? (f === 'complete' ? '#10B981' : f === 'inProgress' ? '#F59E0B' : '#6C63FF') : 'rgba(255,255,255,0.4)'}
+                            />
                             <Text
                                 style={[
                                     styles.filterText,
                                     filter === f && styles.filterTextActive,
+                                    filter === f && f === 'complete' && { color: '#10B981' },
+                                    filter === f && f === 'inProgress' && { color: '#F59E0B' },
                                 ]}
                             >
-                                {f === 'all' ? 'All' : f === 'complete' ? 'Complete' : 'In Progress'}
+                                {f === 'all' ? 'Tous' : f === 'complete' ? 'Terminés' : 'En cours'}
                             </Text>
                         </TouchableOpacity>
                     ))}
@@ -220,10 +252,19 @@ export default function GalleryScreen() {
                     />
                 ) : (
                     <View style={styles.emptyState}>
-                        <MaterialIcons name="photo-library" size={64} color="rgba(255,255,255,0.15)" />
-                        <Text style={styles.emptyTitle}>No Panoramas Yet</Text>
+                        <View style={styles.emptyIconWrap}>
+                            <MaterialIcons name="photo-library" size={56} color="rgba(108, 99, 255, 0.3)" />
+                        </View>
+                        <Text style={styles.emptyTitle}>
+                            {filter === 'all' ? 'Aucun panorama' : filter === 'complete' ? 'Aucun panorama terminé' : 'Aucun panorama en cours'}
+                        </Text>
                         <Text style={styles.emptySubtitle}>
-                            Start capturing 360° panoramas to see them here
+                            {filter === 'all'
+                                ? 'Commencez à capturer des panoramas 360° pour les voir ici'
+                                : filter === 'complete'
+                                    ? 'Terminez vos captures en cours pour voir vos panoramas ici'
+                                    : 'Lancez une nouvelle capture pour commencer'
+                            }
                         </Text>
                         <TouchableOpacity
                             style={styles.emptyButton}
@@ -234,7 +275,7 @@ export default function GalleryScreen() {
                                 style={styles.emptyButtonGradient}
                             >
                                 <MaterialIcons name="camera" size={20} color="#FFFFFF" />
-                                <Text style={styles.emptyButtonText}>Start Capture</Text>
+                                <Text style={styles.emptyButtonText}>Nouvelle capture</Text>
                             </LinearGradient>
                         </TouchableOpacity>
                     </View>
@@ -242,6 +283,29 @@ export default function GalleryScreen() {
             </LinearGradient>
         </View>
     );
+}
+
+/**
+ * Format a date string to a human-readable "time since" string in French
+ */
+function getTimeSince(dateString: string): string {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) return "À l'instant";
+    if (diffMins < 60) return `Il y a ${diffMins} min`;
+    if (diffHours < 24) return `Il y a ${diffHours}h`;
+    if (diffDays < 7) return `Il y a ${diffDays} jour${diffDays > 1 ? 's' : ''}`;
+
+    return date.toLocaleDateString('fr-FR', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+    });
 }
 
 const styles = StyleSheet.create({
@@ -263,7 +327,7 @@ const styles = StyleSheet.create({
         letterSpacing: 0.5,
     },
     subtitle: {
-        fontSize: 15,
+        fontSize: 14,
         color: 'rgba(255, 255, 255, 0.5)',
         marginTop: 4,
         fontWeight: '500',
@@ -275,16 +339,19 @@ const styles = StyleSheet.create({
         gap: 8,
     },
     filterButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
         paddingVertical: 8,
-        paddingHorizontal: 16,
+        paddingHorizontal: 14,
         borderRadius: 20,
         backgroundColor: 'rgba(255, 255, 255, 0.05)',
         borderWidth: 1,
         borderColor: 'rgba(255, 255, 255, 0.08)',
     },
     filterButtonActive: {
-        backgroundColor: 'rgba(108, 99, 255, 0.2)',
-        borderColor: '#6C63FF',
+        backgroundColor: 'rgba(108, 99, 255, 0.15)',
+        borderColor: 'rgba(108, 99, 255, 0.4)',
     },
     filterText: {
         color: 'rgba(255, 255, 255, 0.5)',
@@ -311,28 +378,50 @@ const styles = StyleSheet.create({
         overflow: 'hidden',
     },
     cardGradient: {
-        padding: 16,
+        padding: 12,
         borderRadius: 18,
         borderWidth: 1,
         borderColor: 'rgba(255, 255, 255, 0.05)',
     },
     thumbnailContainer: {
         width: '100%',
-        height: 80,
+        height: 100,
         justifyContent: 'center',
         alignItems: 'center',
-        marginBottom: 12,
-        borderRadius: 12,
+        marginBottom: 10,
+        borderRadius: 14,
         backgroundColor: 'rgba(255, 255, 255, 0.03)',
+        overflow: 'hidden',
+    },
+    thumbnailImage: {
+        width: '100%',
+        height: '100%',
+        borderRadius: 14,
     },
     completeBadge: {
         position: 'absolute',
-        top: 4,
-        right: 4,
-        width: 22,
-        height: 22,
-        borderRadius: 11,
+        top: 6,
+        right: 6,
+        width: 24,
+        height: 24,
+        borderRadius: 12,
         backgroundColor: '#10B981',
+        justifyContent: 'center',
+        alignItems: 'center',
+        shadowColor: '#10B981',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.5,
+        shadowRadius: 4,
+        elevation: 5,
+    },
+    inProgressBadge: {
+        position: 'absolute',
+        top: 6,
+        right: 6,
+        width: 20,
+        height: 20,
+        borderRadius: 10,
+        backgroundColor: '#F59E0B',
         justifyContent: 'center',
         alignItems: 'center',
     },
@@ -340,18 +429,19 @@ const styles = StyleSheet.create({
         fontSize: 15,
         fontWeight: '700',
         color: '#FFFFFF',
-        marginBottom: 4,
+        marginBottom: 3,
     },
     cardDate: {
-        fontSize: 12,
-        color: 'rgba(255, 255, 255, 0.4)',
-        marginBottom: 12,
+        fontSize: 11,
+        color: 'rgba(255, 255, 255, 0.35)',
+        marginBottom: 10,
+        fontWeight: '500',
     },
     progressContainer: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 8,
-        marginBottom: 12,
+        marginBottom: 10,
     },
     progressTrack: {
         flex: 1,
@@ -373,15 +463,21 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 4,
-        paddingVertical: 8,
-        borderRadius: 10,
-        backgroundColor: 'rgba(255, 255, 255, 0.05)',
+        gap: 6,
+        paddingVertical: 9,
+        borderRadius: 12,
+        backgroundColor: 'rgba(108, 99, 255, 0.1)',
+        borderWidth: 1,
+        borderColor: 'rgba(108, 99, 255, 0.15)',
+    },
+    cardActionComplete: {
+        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+        borderColor: 'rgba(16, 185, 129, 0.15)',
     },
     cardActionText: {
         fontSize: 13,
         fontWeight: '600',
-        color: 'rgba(255, 255, 255, 0.6)',
+        color: '#6C63FF',
     },
     emptyState: {
         flex: 1,
@@ -389,12 +485,23 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         paddingHorizontal: 40,
     },
+    emptyIconWrap: {
+        width: 100,
+        height: 100,
+        borderRadius: 30,
+        backgroundColor: 'rgba(108, 99, 255, 0.08)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 20,
+        borderWidth: 1,
+        borderColor: 'rgba(108, 99, 255, 0.1)',
+    },
     emptyTitle: {
         fontSize: 22,
         fontWeight: '700',
         color: '#FFFFFF',
-        marginTop: 20,
         marginBottom: 8,
+        textAlign: 'center',
     },
     emptySubtitle: {
         fontSize: 14,

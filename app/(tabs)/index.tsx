@@ -6,6 +6,7 @@ import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect } from 'react';
 import {
   Dimensions,
+  Image,
   Platform,
   ScrollView,
   StyleSheet,
@@ -27,7 +28,7 @@ const { width, height } = Dimensions.get('window');
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { state, loadProjects } = usePanorama();
+  const { state, loadProjects, setCurrentProject } = usePanorama();
   const floatAnim = useSharedValue(0);
   const pulseAnim = useSharedValue(1);
   const rotateAnim = useSharedValue(0);
@@ -94,7 +95,7 @@ export default function HomeScreen() {
           <View style={styles.heroSection}>
             <Animated.View entering={FadeInDown.delay(200).duration(800)}>
               <Text style={styles.appName}>Teleport 360°</Text>
-              <Text style={styles.tagline}>Capture the world around you</Text>
+              <Text style={styles.tagline}>Capturez le monde autour de vous</Text>
             </Animated.View>
 
             {/* 3D-like sphere animation */}
@@ -135,9 +136,9 @@ export default function HomeScreen() {
                   end={{ x: 1, y: 1 }}
                 >
                   <MaterialIcons name="camera" size={32} color="#FFFFFF" />
-                  <Text style={styles.captureButtonText}>New 360° Capture</Text>
+                  <Text style={styles.captureButtonText}>Nouvelle Capture 360°</Text>
                   <Text style={styles.captureButtonSubtext}>
-                    Start capturing a spherical panorama
+                    Capturer un panorama sphérique
                   </Text>
                 </LinearGradient>
               </Animated.View>
@@ -168,7 +169,7 @@ export default function HomeScreen() {
                 <Text style={[styles.statNumber, { color: '#10B981' }]}>
                   {state.projects.filter((p) => p.isComplete).length}
                 </Text>
-                <Text style={styles.statLabel}>Completed</Text>
+                <Text style={styles.statLabel}>Terminés</Text>
               </LinearGradient>
             </View>
             <View style={styles.statCard}>
@@ -180,7 +181,7 @@ export default function HomeScreen() {
                 <Text style={[styles.statNumber, { color: '#F59E0B' }]}>
                   {state.projects.filter((p) => !p.isComplete).length}
                 </Text>
-                <Text style={styles.statLabel}>In Progress</Text>
+                <Text style={styles.statLabel}>En cours</Text>
               </LinearGradient>
             </View>
           </Animated.View>
@@ -190,7 +191,7 @@ export default function HomeScreen() {
             entering={FadeInUp.delay(1000).duration(800)}
             style={styles.quickActions}
           >
-            <Text style={styles.sectionTitle}>Quick Actions</Text>
+            <Text style={styles.sectionTitle}>Actions rapides</Text>
             <View style={styles.actionGrid}>
               <TouchableOpacity
                 style={styles.actionCard}
@@ -204,7 +205,7 @@ export default function HomeScreen() {
                     <MaterialIcons name="add-a-photo" size={24} color="#6C63FF" />
                   </View>
                   <Text style={styles.actionTitle}>Capture</Text>
-                  <Text style={styles.actionSubtitle}>New panorama</Text>
+                  <Text style={styles.actionSubtitle}>Nouveau panorama</Text>
                 </LinearGradient>
               </TouchableOpacity>
 
@@ -219,8 +220,8 @@ export default function HomeScreen() {
                   <View style={[styles.actionIconContainer, { backgroundColor: 'rgba(255, 107, 107, 0.15)' }]}>
                     <MaterialIcons name="collections" size={24} color="#FF6B6B" />
                   </View>
-                  <Text style={styles.actionTitle}>Gallery</Text>
-                  <Text style={styles.actionSubtitle}>View all</Text>
+                  <Text style={styles.actionTitle}>Galerie</Text>
+                  <Text style={styles.actionSubtitle}>Tout voir</Text>
                 </LinearGradient>
               </TouchableOpacity>
 
@@ -235,8 +236,8 @@ export default function HomeScreen() {
                   <View style={[styles.actionIconContainer, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
                     <MaterialIcons name="tune" size={24} color="#10B981" />
                   </View>
-                  <Text style={styles.actionTitle}>Settings</Text>
-                  <Text style={styles.actionSubtitle}>Configure</Text>
+                  <Text style={styles.actionTitle}>Réglages</Text>
+                  <Text style={styles.actionSubtitle}>Configurer</Text>
                 </LinearGradient>
               </TouchableOpacity>
             </View>
@@ -248,17 +249,30 @@ export default function HomeScreen() {
               entering={FadeInUp.delay(1200).duration(800)}
               style={styles.recentSection}
             >
-              <Text style={styles.sectionTitle}>Recent Captures</Text>
+              <Text style={styles.sectionTitle}>Captures récentes</Text>
               {recentProjects.map((project) => (
                 <TouchableOpacity
                   key={project.id}
                   style={styles.recentCard}
                   onPress={() => {
-                    // Navigate to project details
+                    setCurrentProject(project);
+                    if (project.isComplete) {
+                      router.push('/viewer');
+                    } else {
+                      router.push('/capture');
+                    }
                   }}
                 >
                   <View style={styles.recentThumbnail}>
-                    <MaterialIcons name="panorama" size={32} color="#6C63FF" />
+                    {(project.panoramaUri || project.positions.find(p => p.captured && p.uri)?.uri) ? (
+                      <Image
+                        source={{ uri: project.panoramaUri || project.positions.find(p => p.captured && p.uri)?.uri }}
+                        style={{ width: '100%', height: '100%', borderRadius: 12 }}
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <MaterialIcons name="panorama" size={32} color="#6C63FF" />
+                    )}
                   </View>
                   <View style={styles.recentInfo}>
                     <Text style={styles.recentName}>{project.name}</Text>
@@ -510,6 +524,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 14,
+    overflow: 'hidden',
   },
   recentInfo: {
     flex: 1,
