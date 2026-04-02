@@ -1,22 +1,29 @@
 // Interactive 360° Sphere Viewer with Gyroscope + Touch + Inertia + Pinch-to-Zoom
 // Like Teleport & Google Street View: move your phone to look around
 
-import { MaterialIcons } from '@expo/vector-icons';
-import { DeviceMotion } from 'expo-sensors';
-import React, { useEffect, useRef, useState } from 'react';
-import { Dimensions, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { WebView } from 'react-native-webview';
+import { MaterialIcons } from "@expo/vector-icons";
+import { DeviceMotion } from "expo-sensors";
+import { useEffect, useRef, useState } from "react";
+import {
+    Dimensions,
+    Platform,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
+} from "react-native";
+import { WebView } from "react-native-webview";
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
 interface Sphere360ViewerProps {
-    imageUri: string;
-    onClose?: () => void;
-    onShare?: () => void;
+  imageUri: string;
+  onClose?: () => void;
+  onShare?: () => void;
 }
 
 function generate360ViewerHTML(imageDataUri: string): string {
-    return `
+  return `
 <!DOCTYPE html>
 <html>
 <head>
@@ -142,7 +149,7 @@ function generate360ViewerHTML(imageDataUri: string): string {
             return { vertices, texCoords, indices };
         }
 
-        const sphere = createSphere(50, 64, 32);
+        const sphere = createSphere(50, 64, 64);
 
         const vertexBuffer = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
@@ -344,7 +351,8 @@ function generate360ViewerHTML(imageDataUri: string): string {
         img.onload = () => {
             gl.bindTexture(gl.TEXTURE_2D, texture);
             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.generateMipmap(gl.TEXTURE_2D);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
@@ -404,53 +412,57 @@ function generate360ViewerHTML(imageDataUri: string): string {
 </html>`;
 }
 
-export default function Sphere360Viewer({ imageUri, onClose, onShare }: Sphere360ViewerProps) {
-    const webViewRef = useRef<WebView>(null);
-    const [imageData, setImageData] = useState<string | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
-    const [gyroActive, setGyroActive] = useState(true);
+export default function Sphere360Viewer({
+  imageUri,
+  onClose,
+  onShare,
+}: Sphere360ViewerProps) {
+  const webViewRef = useRef<WebView>(null);
+  const [imageData, setImageData] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [gyroActive, setGyroActive] = useState(true);
 
-    // Load image as base64 for WebView
-    useEffect(() => {
-        async function loadImage() {
-            if (imageUri.startsWith('data:')) {
-                setImageData(imageUri);
-                setIsLoading(false);
-            } else {
-                try {
-                    const FileSystem = require('expo-file-system/legacy');
-                    const base64 = await FileSystem.readAsStringAsync(imageUri, {
-                        encoding: FileSystem.EncodingType.Base64,
-                    });
-                    setImageData(`data:image/jpeg;base64,${base64}`);
-                    setIsLoading(false);
-                } catch (err) {
-                    console.error('Failed to load panorama image:', err);
-                    setIsLoading(false);
-                }
-            }
+  // Load image as base64 for WebView
+  useEffect(() => {
+    async function loadImage() {
+      if (imageUri.startsWith("data:")) {
+        setImageData(imageUri);
+        setIsLoading(false);
+      } else {
+        try {
+          const FileSystem = require("expo-file-system/legacy");
+          const base64 = await FileSystem.readAsStringAsync(imageUri, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+          setImageData(`data:image/jpeg;base64,${base64}`);
+          setIsLoading(false);
+        } catch (err) {
+          console.error("Failed to load panorama image:", err);
+          setIsLoading(false);
         }
-        loadImage();
-    }, [imageUri]);
+      }
+    }
+    loadImage();
+  }, [imageUri]);
 
-    // Setup gyroscope and send data to WebView
-    useEffect(() => {
-        if (Platform.OS === 'web' || !gyroActive) return;
+  // Setup gyroscope and send data to WebView
+  useEffect(() => {
+    if (Platform.OS === "web" || !gyroActive) return;
 
-        let subscription: any;
+    let subscription: any;
 
-        const setup = async () => {
-            try {
-                const isAvailable = await DeviceMotion.isAvailableAsync();
-                if (!isAvailable) return;
+    const setup = async () => {
+      try {
+        const isAvailable = await DeviceMotion.isAvailableAsync();
+        if (!isAvailable) return;
 
-                DeviceMotion.setUpdateInterval(33);
-                subscription = DeviceMotion.addListener((data) => {
-                    if (data.rotation && webViewRef.current) {
-                        const yaw = ((data.rotation.alpha || 0) * 180) / Math.PI;
-                        const pitch = ((data.rotation.beta || 0) * 180) / Math.PI;
+        DeviceMotion.setUpdateInterval(33);
+        subscription = DeviceMotion.addListener((data) => {
+          if (data.rotation && webViewRef.current) {
+            const yaw = ((data.rotation.alpha || 0) * 180) / Math.PI;
+            const pitch = ((data.rotation.beta || 0) * 180) / Math.PI;
 
-                        webViewRef.current.injectJavaScript(`
+            webViewRef.current.injectJavaScript(`
                             try {
                                 window.dispatchEvent(new MessageEvent('message', {
                                     data: JSON.stringify({
@@ -462,27 +474,31 @@ export default function Sphere360Viewer({ imageUri, onClose, onShare }: Sphere36
                             } catch(e) {}
                             true;
                         `);
-                    }
-                });
-            } catch (err) {
-                console.warn('Gyroscope not available for viewer:', err);
-            }
-        };
+          }
+        });
+      } catch (err) {
+        console.warn("Gyroscope not available for viewer:", err);
+      }
+    };
 
-        setup();
+    setup();
 
-        return () => {
-            if (subscription) {
-                try { subscription.remove(); } catch (e) { /* ignore */ }
-            }
-        };
-    }, [gyroActive]);
+    return () => {
+      if (subscription) {
+        try {
+          subscription.remove();
+        } catch (e) {
+          /* ignore */
+        }
+      }
+    };
+  }, [gyroActive]);
 
-    const toggleGyro = () => {
-        const newState = !gyroActive;
-        setGyroActive(newState);
-        if (webViewRef.current) {
-            webViewRef.current.injectJavaScript(`
+  const toggleGyro = () => {
+    const newState = !gyroActive;
+    setGyroActive(newState);
+    if (webViewRef.current) {
+      webViewRef.current.injectJavaScript(`
                 try {
                     window.dispatchEvent(new MessageEvent('message', {
                         data: JSON.stringify({ type: 'GYRO_TOGGLE', enabled: ${newState} })
@@ -490,192 +506,198 @@ export default function Sphere360Viewer({ imageUri, onClose, onShare }: Sphere36
                 } catch(e) {}
                 true;
             `);
-        }
-    };
-
-    if (isLoading || !imageData) {
-        return (
-            <View style={styles.container}>
-                <View style={styles.loadingContainer}>
-                    <Text style={styles.loadingText}>Chargement du panorama...</Text>
-                </View>
-            </View>
-        );
     }
+  };
 
-    const html = generate360ViewerHTML(imageData);
-
+  if (isLoading || !imageData) {
     return (
-        <View style={styles.container}>
-            {/* WebGL 360 viewer */}
-            <WebView
-                ref={webViewRef}
-                source={{ html }}
-                style={styles.webview}
-                javaScriptEnabled
-                originWhitelist={['*']}
-                scrollEnabled={false}
-                bounces={false}
-                overScrollMode="never"
-            />
-
-            {/* Floating controls */}
-            <View style={styles.controls}>
-                {onClose && (
-                    <TouchableOpacity style={styles.controlButton} onPress={onClose}>
-                        <MaterialIcons name="arrow-back" size={22} color="#FFFFFF" />
-                    </TouchableOpacity>
-                )}
-                <View style={styles.controlSpacer} />
-                <View style={styles.titlePill}>
-                    <MaterialIcons name="360" size={18} color="#6C63FF" />
-                    <Text style={styles.titleText}>Vue 360°</Text>
-                </View>
-                <View style={styles.controlSpacer} />
-                {onShare && (
-                    <TouchableOpacity style={styles.controlButton} onPress={onShare}>
-                        <MaterialIcons name="share" size={22} color="#FFFFFF" />
-                    </TouchableOpacity>
-                )}
-            </View>
-
-            {/* Bottom controls */}
-            <View style={styles.bottomControls}>
-                {/* Gyroscope toggle */}
-                <TouchableOpacity
-                    style={[styles.bottomButton, gyroActive && styles.bottomButtonActive]}
-                    onPress={toggleGyro}
-                >
-                    <MaterialIcons
-                        name="screen-rotation"
-                        size={20}
-                        color={gyroActive ? '#6C63FF' : 'rgba(255,255,255,0.5)'}
-                    />
-                    <Text style={[
-                        styles.bottomButtonText,
-                        gyroActive && styles.bottomButtonTextActive,
-                    ]}>
-                        {gyroActive ? 'Gyroscope ON' : 'Gyroscope OFF'}
-                    </Text>
-                </TouchableOpacity>
-
-                {/* Hint */}
-                <View style={styles.hintPill}>
-                    <MaterialIcons name="touch-app" size={14} color="rgba(255,255,255,0.5)" />
-                    <Text style={styles.hintText}>
-                        {gyroActive ? 'Bougez le téléphone' : 'Glissez pour explorer'}
-                    </Text>
-                </View>
-            </View>
+      <View style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Chargement du panorama...</Text>
         </View>
+      </View>
     );
+  }
+
+  const html = generate360ViewerHTML(imageData);
+
+  return (
+    <View style={styles.container}>
+      {/* WebGL 360 viewer */}
+      <WebView
+        ref={webViewRef}
+        source={{ html }}
+        style={styles.webview}
+        javaScriptEnabled
+        originWhitelist={["*"]}
+        scrollEnabled={false}
+        bounces={false}
+        overScrollMode="never"
+      />
+
+      {/* Floating controls */}
+      <View style={styles.controls}>
+        {onClose && (
+          <TouchableOpacity style={styles.controlButton} onPress={onClose}>
+            <MaterialIcons name="arrow-back" size={22} color="#FFFFFF" />
+          </TouchableOpacity>
+        )}
+        <View style={styles.controlSpacer} />
+        <View style={styles.titlePill}>
+          <MaterialIcons name="360" size={18} color="#6C63FF" />
+          <Text style={styles.titleText}>Vue 360°</Text>
+        </View>
+        <View style={styles.controlSpacer} />
+        {onShare && (
+          <TouchableOpacity style={styles.controlButton} onPress={onShare}>
+            <MaterialIcons name="share" size={22} color="#FFFFFF" />
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {/* Bottom controls */}
+      <View style={styles.bottomControls}>
+        {/* Gyroscope toggle */}
+        <TouchableOpacity
+          style={[styles.bottomButton, gyroActive && styles.bottomButtonActive]}
+          onPress={toggleGyro}
+        >
+          <MaterialIcons
+            name="screen-rotation"
+            size={20}
+            color={gyroActive ? "#6C63FF" : "rgba(255,255,255,0.5)"}
+          />
+          <Text
+            style={[
+              styles.bottomButtonText,
+              gyroActive && styles.bottomButtonTextActive,
+            ]}
+          >
+            {gyroActive ? "Gyroscope ON" : "Gyroscope OFF"}
+          </Text>
+        </TouchableOpacity>
+
+        {/* Hint */}
+        <View style={styles.hintPill}>
+          <MaterialIcons
+            name="touch-app"
+            size={14}
+            color="rgba(255,255,255,0.5)"
+          />
+          <Text style={styles.hintText}>
+            {gyroActive ? "Bougez le téléphone" : "Glissez pour explorer"}
+          </Text>
+        </View>
+      </View>
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#000',
-    },
-    webview: {
-        flex: 1,
-        backgroundColor: '#000',
-    },
-    loadingContainer: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    loadingText: {
-        color: 'rgba(255,255,255,0.5)',
-        fontSize: 16,
-    },
-    controls: {
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingTop: Platform.OS === 'ios' ? 56 : 36,
-        paddingHorizontal: 16,
-        paddingBottom: 12,
-    },
-    controlButton: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: 'rgba(0, 0, 0, 0.5)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.15)',
-    },
-    controlSpacer: { flex: 1 },
-    titlePill: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        backgroundColor: 'rgba(0, 0, 0, 0.5)',
-        paddingHorizontal: 14,
-        paddingVertical: 8,
-        borderRadius: 20,
-        borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.1)',
-    },
-    titleText: {
-        color: '#FFFFFF',
-        fontSize: 14,
-        fontWeight: '600',
-    },
+  container: {
+    flex: 1,
+    backgroundColor: "#000",
+  },
+  webview: {
+    flex: 1,
+    backgroundColor: "#000",
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  loadingText: {
+    color: "rgba(255,255,255,0.5)",
+    fontSize: 16,
+  },
+  controls: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingTop: Platform.OS === "ios" ? 56 : 36,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+  },
+  controlButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.15)",
+  },
+  controlSpacer: { flex: 1 },
+  titlePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.1)",
+  },
+  titleText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "600",
+  },
 
-    // Bottom controls
-    bottomControls: {
-        position: 'absolute',
-        bottom: 0,
-        left: 0,
-        right: 0,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingHorizontal: 16,
-        paddingBottom: Platform.OS === 'ios' ? 40 : 24,
-        paddingTop: 12,
-    },
-    bottomButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        backgroundColor: 'rgba(0, 0, 0, 0.5)',
-        paddingHorizontal: 14,
-        paddingVertical: 10,
-        borderRadius: 20,
-        borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.15)',
-    },
-    bottomButtonActive: {
-        borderColor: 'rgba(108, 99, 255, 0.4)',
-        backgroundColor: 'rgba(108, 99, 255, 0.15)',
-    },
-    bottomButtonText: {
-        color: 'rgba(255,255,255,0.5)',
-        fontSize: 12,
-        fontWeight: '600',
-    },
-    bottomButtonTextActive: {
-        color: '#6C63FF',
-    },
-    hintPill: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        backgroundColor: 'rgba(0, 0, 0, 0.4)',
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        borderRadius: 16,
-    },
-    hintText: {
-        color: 'rgba(255,255,255,0.5)',
-        fontSize: 11,
-        fontWeight: '500',
-    },
+  // Bottom controls
+  bottomControls: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingBottom: Platform.OS === "ios" ? 40 : 24,
+    paddingTop: 12,
+  },
+  bottomButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.15)",
+  },
+  bottomButtonActive: {
+    borderColor: "rgba(108, 99, 255, 0.4)",
+    backgroundColor: "rgba(108, 99, 255, 0.15)",
+  },
+  bottomButtonText: {
+    color: "rgba(255,255,255,0.5)",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  bottomButtonTextActive: {
+    color: "#6C63FF",
+  },
+  hintPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(0, 0, 0, 0.4)",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 16,
+  },
+  hintText: {
+    color: "rgba(255,255,255,0.5)",
+    fontSize: 11,
+    fontWeight: "500",
+  },
 });

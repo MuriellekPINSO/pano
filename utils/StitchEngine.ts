@@ -7,35 +7,35 @@
 // - Neighbor-aware exposure equalization
 // - Smoother gap filling with larger initial radius
 
-import { CAPTURE_CONFIG, CapturePosition } from '@/constants/CaptureConfig';
-import * as FileSystem from 'expo-file-system/legacy';
+import { CAPTURE_CONFIG, CapturePosition } from "@/constants/CaptureConfig";
+import * as FileSystem from "expo-file-system/legacy";
 
 // Output dimensions — higher quality
 const EQUIRECT_WIDTH = 4096;
 const EQUIRECT_HEIGHT = 2048; // 2:1 ratio
 
 export interface StitchResult {
-    uri: string;
-    width: number;
-    height: number;
+  uri: string;
+  width: number;
+  height: number;
 }
 
 /**
  * Generate stitching HTML with improved spherical projection and blending.
  */
 export function generateStitchHTML(positions: CapturePosition[]): string {
-    const capturedPositions = positions.filter(p => p.captured && p.uri);
+  const capturedPositions = positions.filter((p) => p.captured && p.uri);
 
-    const imageData = capturedPositions.map(pos => ({
-        uri: pos.uri!,
-        yaw: pos.yaw,
-        pitch: pos.pitch,
-        row: pos.row,
-        col: pos.col,
-        id: pos.id,
-    }));
+  const imageData = capturedPositions.map((pos) => ({
+    uri: pos.uri!,
+    yaw: pos.yaw,
+    pitch: pos.pitch,
+    row: pos.row,
+    col: pos.col,
+    id: pos.id,
+  }));
 
-    return `
+  return `
 <!DOCTYPE html>
 <html>
 <head>
@@ -58,8 +58,8 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
         const CAM_HFOV = CAM_HFOV_DEG * Math.PI / 180;
         const CAM_VFOV = CAM_VFOV_DEG * Math.PI / 180;
         
-        // Increased coverage boost for better overlap
-        const COVERAGE_BOOST = 1.55;
+        // Reduced coverage boost: limits edge extrapolation artifacts
+        const COVERAGE_BOOST = 1.35;
 
         const images = ${JSON.stringify(imageData)};
 
@@ -141,15 +141,16 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
         }
 
         /**
-         * Improved feathering: earlier start (30% from center), 
-         * smoother cosine falloff for seamless blending
+         * Euclidean feathering: circular blend zones, earlier start (30% from center),
+         * smooth cosine falloff — eliminates boxy seam profiles from Chebyshev metric
          */
         function feather(u, v) {
             const du = Math.abs(u - 0.5) * 2; // 0 at center, 1 at edge
             const dv = Math.abs(v - 0.5) * 2;
-            const d = Math.max(du, dv);
+            // Euclidean distance for circular blend zones (no boxy seam profiles)
+            const d = Math.min(1.0, Math.sqrt(du * du + dv * dv) / Math.SQRT2);
             if (d >= 1) return 0;
-            // Start fading much earlier — at 30% from center
+            // Start fading at 30% from center
             if (d < 0.3) return 1;
             // Smooth cosine falloff over the remaining 70%
             return 0.5 + 0.5 * Math.cos(Math.PI * (d - 0.3) / 0.7);
@@ -205,8 +206,8 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
                 try {
                     const img = await loadImage(images[i].uri);
                     // Higher resolution tiles for better quality
-                    const tw = 1200;
-                    const th = 900;
+                    const tw = 1600;
+                    const th = 1200;
                     tmpCanvas.width = tw;
                     tmpCanvas.height = th;
                     tmpCtx.drawImage(img, 0, 0, tw, th);
@@ -282,7 +283,7 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
                 }
                 
                 // Softer clamping range for more natural results
-                const factor = Math.max(0.7, Math.min(1.4, targetBrightness / (myBrightness || targetBrightness)));
+                const factor = Math.max(0.5, Math.min(2.5, targetBrightness / (myBrightness || targetBrightness)));
                 exposureFactors.push(factor);
             }
 
@@ -506,51 +507,51 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
  * Save a base64 data URI to a file
  */
 export async function saveBase64Image(
-    dataUrl: string,
-    projectId: string
+  dataUrl: string,
+  projectId: string,
 ): Promise<string> {
-    const base64 = dataUrl.replace(/^data:image\/jpeg;base64,/, '');
-    const outputDir = `${FileSystem.documentDirectory}panorama_projects/${projectId}/`;
-    const outputPath = `${outputDir}panorama_equirect.jpg`;
+  const base64 = dataUrl.replace(/^data:image\/jpeg;base64,/, "");
+  const outputDir = `${FileSystem.documentDirectory}panorama_projects/${projectId}/`;
+  const outputPath = `${outputDir}panorama_equirect.jpg`;
 
-    const dirInfo = await FileSystem.getInfoAsync(outputDir);
-    if (!dirInfo.exists) {
-        await FileSystem.makeDirectoryAsync(outputDir, { intermediates: true });
-    }
+  const dirInfo = await FileSystem.getInfoAsync(outputDir);
+  if (!dirInfo.exists) {
+    await FileSystem.makeDirectoryAsync(outputDir, { intermediates: true });
+  }
 
-    await FileSystem.writeAsStringAsync(outputPath, base64, {
-        encoding: FileSystem.EncodingType.Base64,
-    });
+  await FileSystem.writeAsStringAsync(outputPath, base64, {
+    encoding: FileSystem.EncodingType.Base64,
+  });
 
-    return outputPath;
+  return outputPath;
 }
 
 /**
  * Prepare image URIs for the WebView (convert file:// to base64)
  */
 export async function prepareImagesForStitch(
-    positions: CapturePosition[]
+  positions: CapturePosition[],
 ): Promise<CapturePosition[]> {
-    const prepared: CapturePosition[] = [];
+  const prepared: CapturePosition[] = [];
 
-    for (const pos of positions) {
-        if (pos.captured && pos.uri) {
-            try {
-                const base64 = await FileSystem.readAsStringAsync(pos.uri, {
-                    encoding: FileSystem.EncodingType.Base64,
-                });
-                prepared.push({
-                    ...pos,
-                    uri: `data:image/jpeg;base64,${base64}`,
-                });
-            } catch (err) {
-                console.warn(`Failed to read image for position ${pos.id}:`, err);
-                prepared.push(pos);
-            }
-        } else {
-            prepared.push(pos);
-        }
+  for (const pos of positions) {
+    if (pos.captured && pos.uri) {
+      try {
+        const base64 = await FileSystem.readAsStringAsync(pos.uri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        prepared.push({
+          ...pos,
+          uri: `data:image/jpeg;base64,${base64}`,
+        });
+      } catch (err) {
+        console.warn(`Failed to read image for position ${pos.id}:`, err);
+        prepared.push(pos);
+      }
+    } else {
+      prepared.push(pos);
     }
+  }
 
-    return prepared;
+  return prepared;
 }
