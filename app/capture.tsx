@@ -1,5 +1,5 @@
 import CaptureGuideOverlay from "@/components/CaptureGuideOverlay";
-import { CAPTURE_CONFIG, CapturePosition } from "@/constants/CaptureConfig";
+import { CAPTURE_CONFIG, CapturePosition, toScreen, VF_W, VF_H, VF_TOP, VF_LEFT } from "@/constants/CaptureConfig";
 import { usePanorama } from "@/context/PanoramaContext";
 import { MaterialIcons } from "@expo/vector-icons";
 import { CameraType, CameraView, useCameraPermissions } from "expo-camera";
@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
     Alert,
     Dimensions,
+    Image,
     Modal,
     Platform,
     StyleSheet,
@@ -24,12 +25,17 @@ import Animated, {
     FadeInDown,
     useAnimatedStyle,
     useSharedValue,
+    withRepeat,
     withSequence,
     withSpring,
     withTiming,
 } from "react-native-reanimated";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
+
+// La caméra occupe tout l'écran (comme Teleport)
+// Le viewfinder rectangulaire est dessiné par CaptureGuideOverlay
+
 
 export default function CaptureScreen() {
   const router = useRouter();
@@ -72,12 +78,11 @@ export default function CaptureScreen() {
   // Auto-capture
   const alignedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Animations
   const flashOpacity = useSharedValue(0);
   const captureScale = useSharedValue(1);
+  const captureRingScale = useSharedValue(1);
   const successScale = useSharedValue(0);
   const rowMessageOpacity = useSharedValue(0);
-  const photoCountAnim = useSharedValue(1);
 
   // Track initial yaw offset
   const initialYaw = useRef<number | null>(null);
@@ -85,7 +90,7 @@ export default function CaptureScreen() {
   // Smoothed gyroscope values (low-pass filter)
   const smoothedYaw = useRef(0);
   const smoothedPitch = useRef(0);
-  const SMOOTHING = 0.15;
+  const SMOOTHING = 0.35;
 
   // Proximity haptic pulse
   const lastHapticTime = useRef(0);
@@ -104,7 +109,7 @@ export default function CaptureScreen() {
       try {
         const isAvailable = await DeviceMotion.isAvailableAsync();
         if (isAvailable) {
-          DeviceMotion.setUpdateInterval(33); // ~30fps
+          DeviceMotion.setUpdateInterval(16); // ~60fps
           subscription = DeviceMotion.addListener((data) => {
             if (data.rotation) {
               const { alpha, beta } = data.rotation;
@@ -283,8 +288,6 @@ export default function CaptureScreen() {
           Haptics.NotificationFeedbackType.Success,
         );
 
-        // Count animation
-        photoCountAnim.value = withSequence(withSpring(1.3), withSpring(1));
       }
     } catch (error) {
       console.error("Error capturing photo:", error);
@@ -293,6 +296,22 @@ export default function CaptureScreen() {
       setIsTakingPhoto(false);
     }
   }, [targetPosition, isTakingPhoto, state.currentProject, capturePhoto]);
+
+  // RECORDING ring pulse when aligned
+  useEffect(() => {
+    if (aligned && !isTakingPhoto) {
+      captureRingScale.value = withRepeat(
+        withSequence(
+          withTiming(1.12, { duration: 380 }),
+          withTiming(1.0,  { duration: 380 }),
+        ),
+        -1,
+        true,
+      );
+    } else {
+      captureRingScale.value = withTiming(1.0, { duration: 200 });
+    }
+  }, [aligned, isTakingPhoto]);
 
   // Auto-capture when aligned
   useEffect(() => {
@@ -360,6 +379,10 @@ export default function CaptureScreen() {
     transform: [{ scale: captureScale.value }],
   }));
 
+  const captureRingAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: captureRingScale.value }],
+  }));
+
   const successStyle = useAnimatedStyle(() => ({
     transform: [{ scale: successScale.value }],
     opacity: successScale.value,
@@ -371,7 +394,7 @@ export default function CaptureScreen() {
   }));
 
   const photoCountAnimStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: photoCountAnim.value }],
+    transform: [{ scale: 1 }], // kept for API compat, not rendered
   }));
 
   // Permission handling
@@ -416,39 +439,64 @@ export default function CaptureScreen() {
     );
   }
 
-  const capturedCount = state.currentProject?.capturedPhotos || 0;
-  const totalCount =
-    state.currentProject?.totalPhotos || CAPTURE_CONFIG.TOTAL_PHOTOS;
-  const progressPercent =
-    totalCount > 0 ? (capturedCount / totalCount) * 100 : 0;
-  const currentRow = targetPosition?.row ?? 0;
-  const rowColor = CAPTURE_CONFIG.ROW_COLORS[currentRow] || "#6C63FF";
-
   return (
     <View style={styles.container}>
-      {/* Camera */}
-      <CameraView
-        ref={cameraRef}
-        style={StyleSheet.absoluteFill}
-        facing={facing}
-        autofocus={cameraLocked ? "off" : "on"}
-      />
 
-      {/* Guide Overlay */}
-      {isReady && state.currentProject && (
-        <CaptureGuideOverlay
-          positions={state.currentProject.positions}
-          currentYaw={currentYaw}
-          currentPitch={currentPitch}
-          targetPosition={targetPosition}
-          isAligned={aligned}
+      <View style={{ flex: 1, backgroundColor: '#000' }}>
+        {/* Affichage des photos capturées dans l'espace (le "Vide Noir") */}
+        {state.currentProject?.positions.map(pos => {
+          if (!pos.captured || !pos.uri) return null;
+          // toScreen donne le centre. On veut positionner la photo (qui a la taille du Viewfinder)
+          // pour qu'elle semble physiquement à sa position.
+          const pos2D = toScreen(pos.yaw, pos.pitch, currentYaw, currentPitch, SCREEN_WIDTH, SCREEN_HEIGHT);
+          
+          return (
+            <Image
+              key={`patch-${pos.id}`}
+              source={{ uri: pos.uri }}
+              style={{
+                position: 'absolute',
+                left: pos2D.x - VF_W / 2,
+                top: pos2D.y - VF_H / 2,
+                width: VF_W,
+                height: VF_H,
+                opacity: 0.85,
+                zIndex: 1,
+              }}
+            />
+          );
+        })}
+
+        <CameraView
+          ref={cameraRef}
+          style={{
+            position: 'absolute',
+            top: VF_TOP,
+            left: VF_LEFT,
+            width: VF_W,
+            height: VF_H,
+            zIndex: 5,
+          }}
+          facing="back"
+          autofocus={cameraLocked ? "off" : "on"}
         />
-      )}
 
-      {/* Flash overlay */}
+        {/* Teleport-style Guide Overlay (black void + orbs + frame) */}
+        {isReady && state.currentProject && (
+          <CaptureGuideOverlay
+            positions={state.currentProject.positions}
+            currentYaw={currentYaw}
+            currentPitch={currentPitch}
+            targetPosition={targetPosition}
+            isAligned={aligned}
+          />
+        )}
+      </View>
+
+      {/* Photo flash */}
       <Animated.View style={[styles.flash, flashStyle]} pointerEvents="none" />
 
-      {/* Success check */}
+      {/* Success checkmark */}
       <Animated.View
         style={[styles.successIndicator, successStyle]}
         pointerEvents="none"
@@ -458,35 +506,14 @@ export default function CaptureScreen() {
         </View>
       </Animated.View>
 
-      {/* Row transition message */}
+      {/* Row change banner */}
       {rowMessage && (
         <Animated.View
           style={[styles.rowTransition, rowMessageStyle]}
           pointerEvents="none"
         >
-          <View
-            style={[
-              styles.rowTransitionInner,
-              { borderColor: rowColor + "50" },
-            ]}
-          >
-            <View
-              style={[
-                styles.rowTransitionIconWrap,
-                { backgroundColor: rowColor + "20" },
-              ]}
-            >
-              <MaterialIcons
-                name={
-                  CAPTURE_CONFIG.ROW_ICONS[
-                    currentRow
-                  ] as keyof typeof MaterialIcons.glyphMap
-                }
-                size={32}
-                color={rowColor}
-              />
-            </View>
-            <Text style={[styles.rowTransitionTitle, { color: rowColor }]}>
+          <View style={styles.rowTransitionInner}>
+            <Text style={styles.rowTransitionTitle}>
               {rowMessage.split("\n")[0]}
             </Text>
             <Text style={styles.rowTransitionSubtitle}>
@@ -496,24 +523,25 @@ export default function CaptureScreen() {
         </Animated.View>
       )}
 
-      {/* Top Controls — Minimalist */}
+      {/* ── TOP CONTROLS ──
+          Exact Teleport layout:
+          - White circle with undo arrow (top-left)
+          - Red filled circle with X (top-right)
+          Positioned above the frame, in the black void */}
       <View style={styles.topControls} pointerEvents="box-none">
-        {/* Back button */}
         <TouchableOpacity
-          style={styles.topButton}
+          style={styles.undoButton}
           onPress={() => {
             saveProjects();
             setCurrentProject(null);
             router.back();
           }}
         >
-          <MaterialIcons name="arrow-back-ios-new" size={18} color="#FFFFFF" />
+          <MaterialIcons name="undo" size={22} color="#000000" />
         </TouchableOpacity>
 
-        {/* Spacer */}
         <View style={{ flex: 1 }} />
 
-        {/* Close button */}
         <TouchableOpacity
           style={styles.closeButton}
           onPress={() => {
@@ -535,74 +563,47 @@ export default function CaptureScreen() {
             );
           }}
         >
-          <MaterialIcons name="close" size={20} color="#FFFFFF" />
+          <MaterialIcons name="close" size={22} color="#FFFFFF" />
         </TouchableOpacity>
       </View>
 
-      {/* Bottom Section — Clean, large capture button */}
+      {/* ── CAPTURE BUTTON ──
+          Teleport has NO visible shutter button — capture is auto-triggered.
+          We keep a minimal button below the frame for manual fallback. */}
       <View style={styles.bottomSection}>
-        {/* Progress bar */}
-        <View style={styles.progressBarContainer}>
-          <View style={styles.progressTrack}>
+        <TouchableOpacity
+          onPress={handleCapture}
+          disabled={isTakingPhoto}
+          activeOpacity={0.7}
+        >
+          <Animated.View style={captureButtonAnimStyle}>
             <Animated.View
               style={[
-                styles.progressFill,
-                {
-                  width: `${progressPercent}%`,
-                  backgroundColor: rowColor,
-                },
+                styles.captureButtonOuter,
+                aligned && styles.captureButtonAligned,
+                captureRingAnimStyle,
               ]}
-            />
-          </View>
-        </View>
-
-        {/* Capture button row */}
-        <View style={styles.captureRow}>
-          {/* Left: photo count */}
-          <Animated.View style={[styles.countContainer, photoCountAnimStyle]}>
-            <Text style={[styles.countNumber, { color: rowColor }]}>
-              {capturedCount}
-            </Text>
-            <Text style={styles.countSeparator}>/</Text>
-            <Text style={styles.countTotal}>{totalCount}</Text>
-          </Animated.View>
-
-          {/* Center: Capture button */}
-          <TouchableOpacity
-            onPress={handleCapture}
-            disabled={isTakingPhoto}
-            activeOpacity={0.7}
-          >
-            <Animated.View style={captureButtonAnimStyle}>
+            >
               <View
                 style={[
-                  styles.captureButtonOuter,
-                  aligned && styles.captureButtonAligned,
+                  styles.captureButtonInner,
+                  aligned && styles.captureButtonInnerAligned,
+                  isTakingPhoto && styles.captureButtonInnerDisabled,
                 ]}
               >
-                <View
-                  style={[
-                    styles.captureButtonInner,
-                    aligned && styles.captureButtonInnerAligned,
-                    isTakingPhoto && styles.captureButtonInnerDisabled,
-                  ]}
-                >
-                  {isTakingPhoto && (
-                    <MaterialIcons
-                      name="hourglass-top"
-                      size={24}
-                      color="rgba(255,255,255,0.5)"
-                    />
-                  )}
-                </View>
+                {isTakingPhoto && (
+                  <MaterialIcons
+                    name="hourglass-top"
+                    size={24}
+                    color="rgba(255,255,255,0.5)"
+                  />
+                )}
               </View>
             </Animated.View>
-          </TouchableOpacity>
-
-          {/* Right: Empty spacer for symmetry */}
-          <View style={styles.countContainer} />
-        </View>
+          </Animated.View>
+        </TouchableOpacity>
       </View>
+
 
       {/* Name Modal */}
       <Modal visible={showNameModal} transparent animationType="fade">
@@ -722,7 +723,13 @@ export default function CaptureScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#000000",
+    backgroundColor: "#000000", // Pure black void — Teleport style
+  },
+
+  // Caméra fullscreen — le viewfinder est affiché par CaptureGuideOverlay
+  cameraWindow: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 1,
   },
   gradient: {
     flex: 1,
@@ -760,39 +767,42 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     justifyContent: "center",
     alignItems: "center",
-    zIndex: 25,
-    backgroundColor: "rgba(0, 0, 0, 0.4)",
+    zIndex: 50,
+    backgroundColor: "rgba(0, 0, 0, 0.6)",
   },
   rowTransitionInner: {
-    backgroundColor: "rgba(15, 15, 26, 0.92)",
-    borderRadius: 28,
-    padding: 32,
+    backgroundColor: "rgba(0, 0, 0, 0.88)",
+    borderRadius: 20,
+    paddingVertical: 24,
+    paddingHorizontal: 32,
     alignItems: "center",
-    gap: 10,
-    borderWidth: 2,
-    minWidth: 260,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: "rgba(34, 197, 94, 0.4)",
+    minWidth: 240,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.5,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.6,
     shadowRadius: 30,
     elevation: 20,
   },
   rowTransitionIconWrap: {
-    width: 64,
-    height: 64,
-    borderRadius: 20,
+    width: 48,
+    height: 48,
+    borderRadius: 14,
     justifyContent: "center",
     alignItems: "center",
     marginBottom: 4,
   },
   rowTransitionTitle: {
-    fontSize: 26,
+    fontSize: 20,
     fontWeight: "800",
+    color: "#22C55E",
     letterSpacing: 0.5,
   },
   rowTransitionSubtitle: {
-    fontSize: 15,
-    color: "rgba(255, 255, 255, 0.6)",
+    fontSize: 14,
+    color: "rgba(255, 255, 255, 0.65)",
     textAlign: "center",
     fontWeight: "500",
   },
@@ -806,84 +816,48 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingTop: Platform.OS === "ios" ? 60 : 40,
-    paddingHorizontal: 16,
-    zIndex: 30,
+    paddingTop: Platform.OS === "ios" ? 58 : 38,
+    paddingHorizontal: 20,
+    zIndex: 50,
   },
-  topButton: {
+  // Teleport undo button: white filled circle, black icon
+  undoButton: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: "rgba(0, 0, 0, 0.45)",
+    backgroundColor: "rgba(255, 255, 255, 0.92)",
     justifyContent: "center",
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.1)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 4,
   },
+  // Teleport close button: red filled circle, white X
   closeButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: "rgba(239, 68, 68, 0.7)",
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#EF4444",
     justifyContent: "center",
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: "rgba(239, 68, 68, 0.3)",
+    shadowColor: "#EF4444",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 6,
+    elevation: 6,
   },
 
-  // ── Bottom Section ──
+  // ── Bottom section ──
   bottomSection: {
     position: "absolute",
     bottom: 0,
     left: 0,
     right: 0,
     alignItems: "center",
-    paddingBottom: Platform.OS === "ios" ? 36 : 20,
-    paddingTop: 14,
-    zIndex: 30,
-  },
-  progressBarContainer: {
-    paddingHorizontal: 40,
-    width: "100%",
-    marginBottom: 18,
-  },
-  progressTrack: {
-    height: 4,
-    backgroundColor: "rgba(255, 255, 255, 0.12)",
-    borderRadius: 2,
-    overflow: "hidden",
-  },
-  progressFill: {
-    height: "100%",
-    borderRadius: 2,
-  },
-  captureRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    width: "100%",
-    paddingHorizontal: 30,
-  },
-  countContainer: {
-    width: 70,
-    flexDirection: "row",
-    alignItems: "baseline",
-    justifyContent: "center",
-  },
-  countNumber: {
-    fontSize: 24,
-    fontWeight: "800",
-  },
-  countSeparator: {
-    fontSize: 16,
-    fontWeight: "500",
-    color: "rgba(255, 255, 255, 0.3)",
-    marginHorizontal: 1,
-  },
-  countTotal: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "rgba(255, 255, 255, 0.4)",
+    paddingBottom: Platform.OS === "ios" ? 28 : 16,
+    zIndex: 50,
   },
 
   // ── Capture Button ──

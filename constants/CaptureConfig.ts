@@ -1,18 +1,14 @@
 // Configuration for 360° capture - Optimized for coverage AND great UX
 // 18 photos total: enough for seamless stitching, fast enough (~90s)
 // Row-by-row guided capture like Google Street View
+import { Dimensions } from 'react-native';
 
 export const CAPTURE_CONFIG = {
-  // Grid: 3 rings + zenith — improved coverage
-  // Row 0 (Horizon):  8 photos at pitch  0°  — main coverage
-  // Row 1 (Top):      6 photos at pitch +50° — upper hemisphere
-  // Row 2 (Bottom):   5 photos at pitch -50° — lower hemisphere (72° spacing, was 120°)
-  // Row 3 (Zenith):   3 photos at pitch +85° — ceiling (120° spacing, interleaved with row 1)
-  ROWS: 4,
-  COLS_PER_ROW: [8, 6, 5, 3],
-  ROW_PITCHES: [0, 50, -50, 85],
-  HORIZONTAL_STEP: 45, // 360 / 8 = 45° (row 0)
-  TOTAL_PHOTOS: 22,
+  // Grid: 6 rings — 51 photos total (Exact Teleport 360 layout)
+  ROWS: 6,
+  COLS_PER_ROW: [14, 12, 12, 6, 6, 1],
+  ROW_PITCHES: [0, 35, -35, 65, -65, 85],
+  TOTAL_PHOTOS: 51,
 
   // Camera settings
   CAMERA: {
@@ -21,35 +17,74 @@ export const CAPTURE_CONFIG = {
   },
 
   // Tighter tolerance for better alignment accuracy
-  POSITION_TOLERANCE: 15,
+  POSITION_TOLERANCE: 10,
 
-  // Fast auto-capture
-  AUTO_CAPTURE_DELAY: 400,
+  // Slightly longer delay so the phone stabilizes before shooting
+  AUTO_CAPTURE_DELAY: 550,
 
   // Camera field of view
   CAMERA_HFOV: 70,
   CAMERA_VFOV: 55,
 
-  // Row labels — French
-  ROW_LABELS: ["Horizon", "Haut", "Bas", "Plafond"] as const,
+  // Row labels
+  ROW_LABELS: ["Horizon", "Haut 1", "Bas 1", "Haut 2", "Bas 2", "Plafond"] as const,
   ROW_ICONS: [
     "panorama-horizontal",
+    "arrow-upward",
+    "arrow-downward",
     "arrow-upward",
     "arrow-downward",
     "vertical-align-top",
   ] as const,
 
-  // Instructions for guided experience
+  // Instructions
   ROW_INSTRUCTIONS: [
-    "Tournez lentement sur vous-même",
-    "Inclinez le téléphone vers le haut",
-    "Inclinez le téléphone vers le bas",
+    "Tenez le téléphone droit\net tournez lentement",
+    "Inclinez vers le haut\net tournez à 360°",
+    "Inclinez vers le bas\net tournez à 360°",
+    "Montez encore plus\nvers le plafond",
+    "Descendez encore plus\nvers le sol",
     "Pointez vers le plafond",
   ] as const,
 
-  // Row colors
-  ROW_COLORS: ["#6C63FF", "#FF6B35", "#10B981", "#F59E0B"] as const,
+  // Couleurs
+  ROW_COLORS: ["#00FF00", "#00FF00", "#00FF00", "#00FF00", "#00FF00", "#00FF00"] as const,
 };
+
+// ── Géométrie du Viewfinder AR ───────────────────────────────────────────────
+const { width: SW0, height: SH0 } = Dimensions.get('window');
+
+// Le Viewfinder cadre la vue live de la caméra
+export const VF_W = SW0 * 0.72;
+export const VF_H = SH0 * 0.48;
+export const VF_LEFT = (SW0 - VF_W) / 2;
+export const VF_TOP = (SH0 - VF_H) / 2 + 20;
+
+// ── Calcul 3D -> 2D ──────────────────────────────────────────────────────────
+export function normDelta(a: number, b: number): number {
+    let d = a - b;
+    if (d > 180) d -= 360;
+    if (d < -180) d += 360;
+    return d;
+}
+
+export function toScreen(yaw: number, pitch: number, curYaw: number, curPitch: number, SW: number, SH: number) {
+    // Les pixels virtuels de deplacement par degres.
+    // L'image de la caméra est contrainte dans VF_W x VF_H.
+    // Donc 55 degres verticaux de camera remplissent VF_H pixels, pas SH pixels !
+    const PX_H = VF_W / CAPTURE_CONFIG.CAMERA_HFOV;
+    const PX_V = VF_H / CAPTURE_CONFIG.CAMERA_VFOV;
+    
+    // Correction de perspective horizontale par rapport à l'équateur 
+    // Plus on regarde haut (pitch != 0), plus les méridiens se resserrent
+    const pitchRad = curPitch * (Math.PI / 180);
+    const adjustedPX_H = PX_H * Math.cos(pitchRad);
+
+    return {
+        x: SW / 2 + normDelta(yaw, curYaw) * adjustedPX_H,
+        y: SH / 2 - (pitch - curPitch) * PX_V,
+    };
+}
 
 // Generate capture positions
 export function generateCapturePositions(): CapturePosition[] {
@@ -62,8 +97,8 @@ export function generateCapturePositions(): CapturePosition[] {
     const yawStep = 360 / colCount;
 
     for (let col = 0; col < colCount; col++) {
-      // Stagger all non-horizon rows for better inter-row coverage
-      const yawOffset = row === 1 || row === 2 || row === 3 ? yawStep / 2 : 0;
+      // Stagger non-horizon rows for perfect honeycomb coverage
+      const yawOffset = (row % 2 !== 0) ? yawStep / 2 : 0;
       positions.push({
         id: id++,
         row,
