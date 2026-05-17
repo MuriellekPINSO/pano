@@ -112,7 +112,7 @@ export default function SettingsScreen() {
                                 <View style={styles.infoItem}>
                                     <MaterialIcons name="grid-on" size={20} color="#6C63FF" />
                                     <Text style={styles.infoValue}>
-                                        {CAPTURE_CONFIG.HORIZONTAL_STEP}°
+                                        {Math.round(360 / CAPTURE_CONFIG.COLS_PER_ROW[0])}°
                                     </Text>
                                     <Text style={styles.infoLabel}>Step Angle</Text>
                                 </View>

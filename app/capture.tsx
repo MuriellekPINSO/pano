@@ -1,5 +1,6 @@
 import CaptureGuideOverlay from "@/components/CaptureGuideOverlay";
 import { CAPTURE_CONFIG, CapturePosition, toScreen, VF_W, VF_H, VF_TOP, VF_LEFT } from "@/constants/CaptureConfig";
+import { attitudeToOrientation } from "@/utils/Geometry";
 import { usePanorama } from "@/context/PanoramaContext";
 import { MaterialIcons } from "@expo/vector-icons";
 import { CameraType, CameraView, useCameraPermissions } from "expo-camera";
@@ -92,6 +93,11 @@ export default function CaptureScreen() {
   const smoothedPitch = useRef(0);
   const SMOOTHING = 0.35;
 
+  // Throttle: last orientation actually pushed into React state
+  const lastEmitTime = useRef(0);
+  const lastEmittedYaw = useRef(0);
+  const lastEmittedPitch = useRef(0);
+
   // Proximity haptic pulse
   const lastHapticTime = useRef(0);
   const proximityRef = useRef(0);
@@ -112,9 +118,16 @@ export default function CaptureScreen() {
           DeviceMotion.setUpdateInterval(16); // ~60fps
           subscription = DeviceMotion.addListener((data) => {
             if (data.rotation) {
-              const { alpha, beta } = data.rotation;
-              let rawYaw = ((alpha || 0) * 180) / Math.PI;
-              const rawPitch = ((beta || 0) * 180) / Math.PI;
+              const { alpha, beta, gamma } = data.rotation;
+              // Derive the real back-camera optical axis from the full device
+              // attitude. Fixes the old bug where `beta` was used directly as
+              // pitch (≈90° when holding the phone upright to shoot the
+              // horizon → the pitch-0 targets were physically unreachable).
+              const att = attitudeToOrientation(
+                alpha || 0, beta || 0, gamma || 0,
+              );
+              let rawYaw = att.yaw;
+              const rawPitch = att.pitch;
 
               if (initialYaw.current === null) {
                 initialYaw.current = rawYaw;
@@ -137,8 +150,27 @@ export default function CaptureScreen() {
               smoothedPitch.current +=
                 (rawPitch - smoothedPitch.current) * SMOOTHING;
 
-              setCurrentYaw(smoothedYaw.current);
-              setCurrentPitch(smoothedPitch.current);
+              // The low-pass filter above runs at the full ~60fps sensor rate,
+              // but pushing that into React state 60×/s caused cascading
+              // re-renders (proximity / auto-capture effects depend on
+              // currentYaw/currentPitch) → "Maximum update depth exceeded".
+              // Commit to state at most ~20fps, and only when the orientation
+              // actually moved enough to matter for aiming.
+              const now = Date.now();
+              let dYaw = smoothedYaw.current - lastEmittedYaw.current;
+              if (dYaw > 180) dYaw -= 360;
+              if (dYaw < -180) dYaw += 360;
+              const dPitch = smoothedPitch.current - lastEmittedPitch.current;
+              const moved =
+                Math.abs(dYaw) > 0.15 || Math.abs(dPitch) > 0.15;
+
+              if (moved && now - lastEmitTime.current >= 50) {
+                lastEmitTime.current = now;
+                lastEmittedYaw.current = smoothedYaw.current;
+                lastEmittedPitch.current = smoothedPitch.current;
+                setCurrentYaw(smoothedYaw.current);
+                setCurrentPitch(smoothedPitch.current);
+              }
             }
           });
         }

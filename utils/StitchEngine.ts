@@ -8,11 +8,14 @@
 // - Smoother gap filling with larger initial radius
 
 import { CAPTURE_CONFIG, CapturePosition } from "@/constants/CaptureConfig";
+import { PROJECTION_JS } from "@/utils/Geometry";
 import * as FileSystem from "expo-file-system/legacy";
 
-// Output dimensions — higher quality
-const EQUIRECT_WIDTH = 4096;
-const EQUIRECT_HEIGHT = 2048; // 2:1 ratio
+// Output dimensions. 4096×2048 = 8.4M px and the per-pixel loop tested every
+// photo → minutes-long stitches / WebView crashes. 2048×1024 is plenty for a
+// phone-viewed 360 and ~4× faster.
+const EQUIRECT_WIDTH = 2048;
+const EQUIRECT_HEIGHT = 1024; // 2:1 ratio
 
 export interface StitchResult {
   uri: string;
@@ -91,54 +94,9 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
             return { yaw, pitch };
         }
 
-        /**
-         * Given a world direction (yaw, pitch) and a camera
-         * pointing at (camYaw, camPitch), compute the normalized
-         * position on the camera's image plane (u, v).
-         * Returns null if the point is behind the camera.
-         */
-        function worldToCamera(dirYaw, dirPitch, camYaw, camPitch) {
-            const dy = deg2rad(dirYaw);
-            const dp = deg2rad(dirPitch);
-            const cy = deg2rad(camYaw);
-            const cp = deg2rad(camPitch);
-
-            // Direction vector (world space)
-            const dx3 = Math.cos(dp) * Math.sin(dy);
-            const dy3 = Math.sin(dp);
-            const dz3 = Math.cos(dp) * Math.cos(dy);
-
-            // Camera forward vector
-            const cx3 = Math.cos(cp) * Math.sin(cy);
-            const cy3 = Math.sin(cp);
-            const cz3 = Math.cos(cp) * Math.cos(cy);
-
-            // Camera right vector
-            const rx = Math.cos(cy);
-            const ry = 0;
-            const rz = -Math.sin(cy);
-
-            // Camera up vector
-            const ux = cy3 * rz - cz3 * ry;
-            const uy = cz3 * rx - cx3 * rz;
-            const uz = cx3 * ry - cy3 * rx;
-
-            // Project direction onto camera axes
-            const fwd = dx3 * cx3 + dy3 * cy3 + dz3 * cz3;
-            if (fwd <= 0.01) return null;
-
-            const right = dx3 * rx + dy3 * ry + dz3 * rz;
-            const up = dx3 * ux + dy3 * uy + dz3 * uz;
-
-            // Perspective projection
-            const tanHalfH = Math.tan(CAM_HFOV / 2);
-            const tanHalfV = Math.tan(CAM_VFOV / 2);
-
-            const u = 0.5 + (right / fwd) / (2 * tanHalfH);
-            const v = 0.5 - (up / fwd) / (2 * tanHalfV);
-
-            return { u, v };
-        }
+        // ── Canonical projection, shared verbatim with capture guidance ──
+        // (injected from utils/Geometry.ts so stitch & guidance can't drift)
+        ${PROJECTION_JS}
 
         /**
          * Euclidean feathering: circular blend zones, earlier start (30% from center),
@@ -205,9 +163,10 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
                 status.textContent = 'Chargement ' + (i+1) + '/' + images.length + '...';
                 try {
                     const img = await loadImage(images[i].uri);
-                    // Higher resolution tiles for better quality
-                    const tw = 1600;
-                    const th = 1200;
+                    // Source tiles: 1024×768 is enough to feed a 2048-wide
+                    // equirect and keeps WebView memory sane with many photos.
+                    const tw = 1024;
+                    const th = 768;
                     tmpCanvas.width = tw;
                     tmpCanvas.height = th;
                     tmpCtx.drawImage(img, 0, 0, tw, th);
@@ -309,10 +268,15 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
                             if (dYaw > 180) dYaw -= 360;
                             if (dYaw < -180) dYaw += 360;
                             const dPitch = dir.pitch - cam.pitch;
-                            if (Math.abs(dYaw) > CAM_HFOV_DEG * COVERAGE_BOOST && Math.abs(dPitch) > CAM_VFOV_DEG * COVERAGE_BOOST) continue;
+                            // BUG FIX: was && — a pixel was only skipped when it
+                            // was far in BOTH yaw AND pitch, so nearly every one
+                            // of the photos was projected for every output pixel
+                            // (the main cause of minutes-long stitches). With ||
+                            // we skip as soon as it's out of range on EITHER axis.
+                            if (Math.abs(dYaw) > CAM_HFOV_DEG * COVERAGE_BOOST || Math.abs(dPitch) > CAM_VFOV_DEG * COVERAGE_BOOST) continue;
 
                             // Project world direction into this camera
-                            const uv = worldToCamera(dir.yaw, dir.pitch, cam.yaw, cam.pitch);
+                            const uv = worldToCamera(dir.yaw, dir.pitch, cam.yaw, cam.pitch, CAM_HFOV_DEG, CAM_VFOV_DEG);
                             if (!uv) continue;
 
                             const { u, v } = uv;

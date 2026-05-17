@@ -2,13 +2,31 @@
 // 18 photos total: enough for seamless stitching, fast enough (~90s)
 // Row-by-row guided capture like Google Street View
 import { Dimensions } from 'react-native';
+import { colsForRing, worldToViewfinder } from '@/utils/Geometry';
+
+// Real-ish field of view of a typical phone back camera in 4:3.
+// (Was 70/55 — pure guesses. These drive ring spacing AND stitch reprojection,
+// so they must be the same number everywhere — hence exported once here.)
+const CAMERA_HFOV = 65;
+const CAMERA_VFOV = 50;
+
+// Desired overlap between adjacent frames (0.45 = 45%). More overlap = more
+// photos but far more robust stitching.
+const RING_OVERLAP = 0.45;
+
+const ROW_PITCHES = [0, 35, -35, 65, -65, 90];
+
+// Columns are DERIVED from the real FOV + overlap, not hand-typed, so the
+// capture grid and the stitch geometry can never drift apart again.
+const COLS_PER_ROW = ROW_PITCHES.map((p, i) =>
+  i === ROW_PITCHES.length - 1 ? 1 : colsForRing(CAMERA_HFOV, p, RING_OVERLAP),
+);
 
 export const CAPTURE_CONFIG = {
-  // Grid: 6 rings — 51 photos total (Exact Teleport 360 layout)
-  ROWS: 6,
-  COLS_PER_ROW: [14, 12, 12, 6, 6, 1],
-  ROW_PITCHES: [0, 35, -35, 65, -65, 85],
-  TOTAL_PHOTOS: 51,
+  ROWS: ROW_PITCHES.length,
+  COLS_PER_ROW,
+  ROW_PITCHES,
+  TOTAL_PHOTOS: COLS_PER_ROW.reduce((a, b) => a + b, 0),
 
   // Camera settings
   CAMERA: {
@@ -17,14 +35,15 @@ export const CAPTURE_CONFIG = {
   },
 
   // Tighter tolerance for better alignment accuracy
-  POSITION_TOLERANCE: 10,
+  POSITION_TOLERANCE: 9,
 
   // Slightly longer delay so the phone stabilizes before shooting
   AUTO_CAPTURE_DELAY: 550,
 
-  // Camera field of view
-  CAMERA_HFOV: 70,
-  CAMERA_VFOV: 55,
+  // Camera field of view (single source of truth — used by capture guidance
+  // AND the stitch reprojection)
+  CAMERA_HFOV,
+  CAMERA_VFOV,
 
   // Row labels
   ROW_LABELS: ["Horizon", "Haut 1", "Bas 1", "Haut 2", "Bas 2", "Plafond"] as const,
@@ -61,29 +80,27 @@ export const VF_LEFT = (SW0 - VF_W) / 2;
 export const VF_TOP = (SH0 - VF_H) / 2 + 20;
 
 // ── Calcul 3D -> 2D ──────────────────────────────────────────────────────────
-export function normDelta(a: number, b: number): number {
-    let d = a - b;
-    if (d > 180) d -= 360;
-    if (d < -180) d += 360;
-    return d;
-}
+// Single shared spherical projection (see utils/Geometry.ts). Both the
+// guidance overlay and the live photo-patch placement now use THIS, which is
+// the exact same maths the stitch engine uses — no more drift.
+export { normDelta } from '@/utils/Geometry';
 
-export function toScreen(yaw: number, pitch: number, curYaw: number, curPitch: number, SW: number, SH: number) {
-    // Les pixels virtuels de deplacement par degres.
-    // L'image de la caméra est contrainte dans VF_W x VF_H.
-    // Donc 55 degres verticaux de camera remplissent VF_H pixels, pas SH pixels !
-    const PX_H = VF_W / CAPTURE_CONFIG.CAMERA_HFOV;
-    const PX_V = VF_H / CAPTURE_CONFIG.CAMERA_VFOV;
-    
-    // Correction de perspective horizontale par rapport à l'équateur 
-    // Plus on regarde haut (pitch != 0), plus les méridiens se resserrent
-    const pitchRad = curPitch * (Math.PI / 180);
-    const adjustedPX_H = PX_H * Math.cos(pitchRad);
-
-    return {
-        x: SW / 2 + normDelta(yaw, curYaw) * adjustedPX_H,
-        y: SH / 2 - (pitch - curPitch) * PX_V,
-    };
+export function toScreen(
+    yaw: number,
+    pitch: number,
+    curYaw: number,
+    curPitch: number,
+    _SW: number,
+    _SH: number,
+) {
+    const r = worldToViewfinder(
+        yaw, pitch, curYaw, curPitch,
+        CAPTURE_CONFIG.CAMERA_HFOV, CAPTURE_CONFIG.CAMERA_VFOV,
+        { left: VF_LEFT, top: VF_TOP, width: VF_W, height: VF_H },
+    );
+    // Behind the camera → push far off-screen so it isn't drawn.
+    if (!r) return { x: -99999, y: -99999 };
+    return { x: r.x, y: r.y };
 }
 
 // Generate capture positions
