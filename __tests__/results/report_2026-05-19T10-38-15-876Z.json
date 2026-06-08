@@ -1,0 +1,236 @@
+{
+  "timestamp": "2026-05-19T10:38:15.877Z",
+  "total": 19,
+  "pass": 19,
+  "fail": 0,
+  "tests": [
+    {
+      "name": "dHash sur image identique → hammingScore = 1.0",
+      "group": "dhash",
+      "status": "PASS",
+      "duration": 2,
+      "details": {
+        "hammingScore": 1
+      }
+    },
+    {
+      "name": "dHash sur images complètement différentes → faible similarité",
+      "group": "dhash",
+      "status": "PASS",
+      "duration": 2,
+      "details": {
+        "hammingScore": "0.391",
+        "note": "Image miroir → gradient inversé → hash différent ✓"
+      }
+    },
+    {
+      "name": "dHash sur mur blanc → hash calculé sans crash",
+      "group": "white_wall",
+      "status": "PASS",
+      "duration": 0,
+      "details": {
+        "hash": "1001010010110001011001100101001001011001000110100111000110010101",
+        "brightness": "243.3",
+        "contrast": "1.40",
+        "note": "Mur blanc: très faible contraste — le matchNeighbors donnera \"poor\""
+      }
+    },
+    {
+      "name": "dHash mur blanc → score de texture très bas (contrast < 15)",
+      "group": "white_wall",
+      "status": "PASS",
+      "duration": 1,
+      "details": {
+        "contrast": "0.82"
+      }
+    },
+    {
+      "name": "EdgeSimilarity: bords identiques → score = 1.0",
+      "group": "edge_match",
+      "status": "PASS",
+      "duration": 0,
+      "details": {
+        "score": 1
+      }
+    },
+    {
+      "name": "EdgeSimilarity: bords très différents → score < 0.1",
+      "group": "edge_match",
+      "status": "PASS",
+      "duration": 0,
+      "details": {
+        "score": 0
+      }
+    },
+    {
+      "name": "matchNeighbors: photos avec overlap → qualité good ou fair",
+      "group": "edge_match",
+      "status": "PASS",
+      "duration": 1,
+      "details": {
+        "quality": "good",
+        "edgeScore": "0.813",
+        "hammingScore": "0.531"
+      }
+    },
+    {
+      "name": "matchNeighbors: mur blanc vs mur blanc → qualité détectée",
+      "group": "white_wall",
+      "status": "PASS",
+      "duration": 0,
+      "details": {
+        "quality": "good",
+        "edgeScore": "0.996",
+        "hammingScore": "0.469",
+        "note": "Mur blanc: faux positif probable (good) → l'app doit utiliser le gyroscope en renfort"
+      }
+    },
+    {
+      "name": "Parallaxe: objet proche décalé → score dégradé",
+      "group": "parallax",
+      "status": "PASS",
+      "duration": 1,
+      "details": {
+        "quality": "fair",
+        "edgeScore": "0.725",
+        "hammingScore": "0.594",
+        "note": "Parallaxe: objet jaune décalé de 6px → score doit être fair ou poor"
+      }
+    },
+    {
+      "name": "Ghosting: personne qui bouge → hamming réduit mais pas nul",
+      "group": "ghosting",
+      "status": "PASS",
+      "duration": 1,
+      "details": {
+        "hammingScore": "0.891",
+        "note": "Score intermédiaire = même fond, sujet déplacé"
+      }
+    },
+    {
+      "name": "HDR: exposition équilibrée entre photo sombre et lumineuse",
+      "group": "hdr",
+      "status": "PASS",
+      "duration": 1,
+      "details": {
+        "darkBrightness": "48.1",
+        "brightBrightness": "200.0",
+        "avgTarget": "124.0",
+        "factorDark": "2.500",
+        "factorBright": "0.620",
+        "note": "factorDark > 1 = image sombre boostée ✓, factorBright < 1 = image lumineuse atténuée ✓"
+      }
+    },
+    {
+      "name": "HDR: constrast extrême → contrast élevé détecté",
+      "group": "hdr",
+      "status": "PASS",
+      "duration": 0,
+      "details": {
+        "brightness": "37.0",
+        "contrast": "66.1"
+      }
+    },
+    {
+      "name": "Couverture complète 22 photos → > 85% couvert",
+      "group": "stitch",
+      "status": "PASS",
+      "duration": 12,
+      "details": {
+        "photos": 22,
+        "coverage": "98.3%",
+        "uncovered": 125
+      }
+    },
+    {
+      "name": "Couverture partielle 5 photos horizon → trous attendus (< 50%)",
+      "group": "stitch",
+      "status": "PASS",
+      "duration": 5,
+      "details": {
+        "photos": 5,
+        "coverage": "33.1%",
+        "note": "Zones polaires non couvertes. Le gap-fill devra compenser."
+      }
+    },
+    {
+      "name": "Couverture photo unique → très partielle (< 25%)",
+      "group": "stitch",
+      "status": "PASS",
+      "duration": 2,
+      "details": {
+        "coverage": "7.9%"
+      }
+    },
+    {
+      "name": "Stitch: 0 photos → 0% couverture",
+      "group": "stitch",
+      "status": "PASS",
+      "duration": 0,
+      "details": {
+        "coveragePercent": 0,
+        "coveredPixels": 0,
+        "uncoveredPixels": 7200,
+        "totalPixels": 7200
+      }
+    },
+    {
+      "name": "buildFingerprint: structure complète",
+      "group": "structure",
+      "status": "PASS",
+      "duration": 1,
+      "details": {
+        "ok": true,
+        "pHashLen": 64,
+        "thumbLen": 2304
+      }
+    },
+    {
+      "name": "hammingSimilarity: tableaux vides → 0",
+      "group": "structure",
+      "status": "PASS",
+      "duration": 0,
+      "details": {
+        "ok": true
+      }
+    },
+    {
+      "name": "computeDHash: longueur = 64",
+      "group": "structure",
+      "status": "PASS",
+      "duration": 0,
+      "details": {
+        "hashLength": 64
+      }
+    }
+  ],
+  "stitchEngine": {
+    "coverageTests": [
+      {
+        "photos": 22,
+        "coverage": "98.3%",
+        "uncovered": 125
+      },
+      {
+        "photos": 5,
+        "coverage": "33.1%",
+        "note": "Zones polaires non couvertes. Le gap-fill devra compenser."
+      },
+      {
+        "coverage": "7.9%"
+      },
+      {
+        "coveragePercent": 0,
+        "coveredPixels": 0,
+        "uncoveredPixels": 7200,
+        "totalPixels": 7200
+      }
+    ]
+  },
+  "algorithmicNotes": {
+    "whiteWall": "Contraste < 15 → pas de points d'accroche → le gyroscope doit prendre le relais",
+    "parallax": "Score dégradé → UI doit avertir l'utilisateur de s'éloigner des objets proches",
+    "ghosting": "Score intermédiaire → le blending choisira au niveau pixel",
+    "hdr": "factorDark > 1, factorBright < 1 → l'égalisation d'exposition fonctionne"
+  }
+}

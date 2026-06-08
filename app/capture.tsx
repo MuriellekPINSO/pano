@@ -67,6 +67,7 @@ export default function CaptureScreen() {
   // Device orientation
   const [currentYaw, setCurrentYaw] = useState(0);
   const [currentPitch, setCurrentPitch] = useState(0);
+  const [currentRoll, setCurrentRoll] = useState(0);
   const [proximity, setProximity] = useState(0);
   const [targetPosition, setTargetPosition] = useState<CapturePosition | null>(
     null,
@@ -91,12 +92,14 @@ export default function CaptureScreen() {
   // Smoothed gyroscope values (low-pass filter)
   const smoothedYaw = useRef(0);
   const smoothedPitch = useRef(0);
+  const smoothedRoll = useRef(0);
   const SMOOTHING = 0.35;
 
   // Throttle: last orientation actually pushed into React state
   const lastEmitTime = useRef(0);
   const lastEmittedYaw = useRef(0);
   const lastEmittedPitch = useRef(0);
+  const lastEmittedRoll = useRef(0);
 
   // Proximity haptic pulse
   const lastHapticTime = useRef(0);
@@ -128,6 +131,7 @@ export default function CaptureScreen() {
               );
               let rawYaw = att.yaw;
               const rawPitch = att.pitch;
+              const rawRoll = att.roll;
 
               if (initialYaw.current === null) {
                 initialYaw.current = rawYaw;
@@ -149,28 +153,15 @@ export default function CaptureScreen() {
 
               smoothedPitch.current +=
                 (rawPitch - smoothedPitch.current) * SMOOTHING;
+              smoothedRoll.current +=
+                (rawRoll - smoothedRoll.current) * SMOOTHING;
 
-              // The low-pass filter above runs at the full ~60fps sensor rate,
-              // but pushing that into React state 60×/s caused cascading
-              // re-renders (proximity / auto-capture effects depend on
-              // currentYaw/currentPitch) → "Maximum update depth exceeded".
-              // Commit to state at most ~20fps, and only when the orientation
-              // actually moved enough to matter for aiming.
-              const now = Date.now();
-              let dYaw = smoothedYaw.current - lastEmittedYaw.current;
-              if (dYaw > 180) dYaw -= 360;
-              if (dYaw < -180) dYaw += 360;
-              const dPitch = smoothedPitch.current - lastEmittedPitch.current;
-              const moved =
-                Math.abs(dYaw) > 0.15 || Math.abs(dPitch) > 0.15;
-
-              if (moved && now - lastEmitTime.current >= 50) {
-                lastEmitTime.current = now;
-                lastEmittedYaw.current = smoothedYaw.current;
-                lastEmittedPitch.current = smoothedPitch.current;
-                setCurrentYaw(smoothedYaw.current);
-                setCurrentPitch(smoothedPitch.current);
-              }
+              // IMPORTANT: the sensor listener NEVER calls setState. It only
+              // updates refs. Pushing state from here (even throttled) let
+              // sensor-event bursts drive React's render loop and tripped
+              // "Maximum update depth exceeded". A separate low-frequency
+              // interval (below) is the ONLY place that commits to state, so
+              // the update rate is bounded and always asynchronous.
             }
           });
         }
@@ -190,6 +181,33 @@ export default function CaptureScreen() {
         }
       }
     };
+  }, []);
+
+  // Sole place orientation is committed to React state. Runs at ~12fps from a
+  // timer (always async, fixed cadence) — decoupled from the ~60fps sensor so
+  // event bursts can never drive the render loop. Only updates on real change.
+  useEffect(() => {
+    const id = setInterval(() => {
+      let dYaw = smoothedYaw.current - lastEmittedYaw.current;
+      if (dYaw > 180) dYaw -= 360;
+      if (dYaw < -180) dYaw += 360;
+      const dPitch = smoothedPitch.current - lastEmittedPitch.current;
+      const dRoll = smoothedRoll.current - lastEmittedRoll.current;
+
+      if (
+        Math.abs(dYaw) > 0.15 ||
+        Math.abs(dPitch) > 0.15 ||
+        Math.abs(dRoll) > 0.2
+      ) {
+        lastEmittedYaw.current = smoothedYaw.current;
+        lastEmittedPitch.current = smoothedPitch.current;
+        lastEmittedRoll.current = smoothedRoll.current;
+        setCurrentYaw(smoothedYaw.current);
+        setCurrentPitch(smoothedPitch.current);
+        setCurrentRoll(smoothedRoll.current);
+      }
+    }, 80);
+    return () => clearInterval(id);
   }, []);
 
   // Update target position
@@ -253,7 +271,12 @@ export default function CaptureScreen() {
     }
   }, [currentYaw, currentPitch, targetPosition, isReady, isTakingPhoto]);
 
-  // Check alignment
+  // Max allowed device roll (°). Stitching is gyro-only and assumes roll = 0,
+  // so a tilted phone is the #1 cause of skewed/ghosted panoramas.
+  const ROLL_TOLERANCE = 6;
+  const isLevel = Math.abs(currentRoll) < ROLL_TOLERANCE;
+
+  // Check alignment — must be aimed at the target AND held level.
   const checkIsAligned = useCallback(() => {
     if (!targetPosition) return false;
     const yawDiff = Math.abs(targetPosition.yaw - currentYaw);
@@ -261,9 +284,10 @@ export default function CaptureScreen() {
     const pitchDiff = Math.abs(targetPosition.pitch - currentPitch);
     return (
       normalizedYawDiff < CAPTURE_CONFIG.POSITION_TOLERANCE &&
-      pitchDiff < CAPTURE_CONFIG.POSITION_TOLERANCE
+      pitchDiff < CAPTURE_CONFIG.POSITION_TOLERANCE &&
+      Math.abs(currentRoll) < ROLL_TOLERANCE
     );
-  }, [targetPosition, currentYaw, currentPitch]);
+  }, [targetPosition, currentYaw, currentPitch, currentRoll]);
 
   const aligned = checkIsAligned();
 
@@ -304,7 +328,9 @@ export default function CaptureScreen() {
         });
 
         // Update state
-        capturePhoto(targetPosition.id, destUri);
+        // Record the device roll at the instant of capture so the stitcher
+        // can undo the in-image rotation (the #1 cause of zigzag seams).
+        capturePhoto(targetPosition.id, destUri, smoothedRoll.current);
 
         // Lock camera focus after first shot (prevents per-photo auto-adjustments)
         if (!cameraLocked) setCameraLocked(true);
@@ -519,6 +545,8 @@ export default function CaptureScreen() {
             positions={state.currentProject.positions}
             currentYaw={currentYaw}
             currentPitch={currentPitch}
+            currentRoll={currentRoll}
+            isLevel={isLevel}
             targetPosition={targetPosition}
             isAligned={aligned}
           />

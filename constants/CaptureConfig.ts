@@ -10,11 +10,16 @@ import { colsForRing, worldToViewfinder } from '@/utils/Geometry';
 const CAMERA_HFOV = 65;
 const CAMERA_VFOV = 50;
 
-// Desired overlap between adjacent frames (0.45 = 45%). More overlap = more
-// photos but far more robust stitching.
-const RING_OVERLAP = 0.45;
+// Desired overlap between adjacent frames: 35%. 20 photos total — the sweet
+// spot where the feature-based recalage (see StitchEngine Step 1.5) has
+// enough shared content to cut misalignment ~40% → near seam-free, while
+// staying a fast Teleport-style capture. Keeping the phone LEVEL still helps.
+const RING_OVERLAP = 0.35;
 
-const ROW_PITCHES = [0, 35, -35, 65, -65, 90];
+// 4 rings: horizon, high up 55°, low down -55°, and an EASY top at 80°
+// (not 90° straight-up, which was awkward to aim). The 55° rings reach far
+// enough that the gap-fill handles the remaining zenith/nadir holes.
+const ROW_PITCHES = [0, 55, -55, 80];
 
 // Columns are DERIVED from the real FOV + overlap, not hand-typed, so the
 // capture grid and the stitch geometry can never drift apart again.
@@ -45,12 +50,10 @@ export const CAPTURE_CONFIG = {
   CAMERA_HFOV,
   CAMERA_VFOV,
 
-  // Row labels
-  ROW_LABELS: ["Horizon", "Haut 1", "Bas 1", "Haut 2", "Bas 2", "Plafond"] as const,
+  // Row labels (one per ring — keep length === ROW_PITCHES.length)
+  ROW_LABELS: ["Horizon", "Haut", "Bas", "Plafond"] as const,
   ROW_ICONS: [
     "panorama-horizontal",
-    "arrow-upward",
-    "arrow-downward",
     "arrow-upward",
     "arrow-downward",
     "vertical-align-top",
@@ -61,9 +64,7 @@ export const CAPTURE_CONFIG = {
     "Tenez le téléphone droit\net tournez lentement",
     "Inclinez vers le haut\net tournez à 360°",
     "Inclinez vers le bas\net tournez à 360°",
-    "Montez encore plus\nvers le plafond",
-    "Descendez encore plus\nvers le sol",
-    "Pointez vers le plafond",
+    "Inclinez bien vers le haut\net tournez (1 tour)",
   ] as const,
 
   // Couleurs
@@ -159,6 +160,9 @@ export interface CapturePosition {
   captured: boolean;
   uri?: string;
   label?: string;
+  /** Device roll (°) at the moment this photo was taken — used by the
+   *  stitcher to undo the in-image rotation. 0 if level. */
+  roll?: number;
 }
 
 export interface PanoramaProject {

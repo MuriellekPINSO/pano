@@ -14,7 +14,7 @@ interface PanoramaState {
 type PanoramaAction =
     | { type: 'CREATE_PROJECT'; payload: PanoramaProject }
     | { type: 'SET_CURRENT_PROJECT'; payload: PanoramaProject | null }
-    | { type: 'CAPTURE_PHOTO'; payload: { positionId: number; uri: string } }
+    | { type: 'CAPTURE_PHOTO'; payload: { positionId: number; uri: string; roll: number } }
     | { type: 'SET_CAPTURING'; payload: boolean }
     | { type: 'SET_CURRENT_POSITION'; payload: number }
     | { type: 'DELETE_PROJECT'; payload: string }
@@ -43,7 +43,7 @@ function panoramaReducer(state: PanoramaState, action: PanoramaAction): Panorama
             if (!state.currentProject) return state;
             const updatedPositions = state.currentProject.positions.map((pos) =>
                 pos.id === action.payload.positionId
-                    ? { ...pos, captured: true, uri: action.payload.uri }
+                    ? { ...pos, captured: true, uri: action.payload.uri, roll: action.payload.roll }
                     : pos
             );
             const capturedCount = updatedPositions.filter((p) => p.captured).length;
@@ -114,7 +114,7 @@ function panoramaReducer(state: PanoramaState, action: PanoramaAction): Panorama
 interface PanoramaContextType {
     state: PanoramaState;
     createProject: (name: string) => Promise<PanoramaProject>;
-    capturePhoto: (positionId: number, uri: string) => void;
+    capturePhoto: (positionId: number, uri: string, roll: number) => void;
     setCurrentProject: (project: PanoramaProject | null) => void;
     setCapturing: (capturing: boolean) => void;
     setCurrentPosition: (index: number) => void;
@@ -188,8 +188,8 @@ export function PanoramaProvider({ children }: { children: ReactNode }) {
         return project;
     }, [ensureDirectoryExists]);
 
-    const capturePhoto = useCallback((positionId: number, uri: string) => {
-        dispatch({ type: 'CAPTURE_PHOTO', payload: { positionId, uri } });
+    const capturePhoto = useCallback((positionId: number, uri: string, roll: number) => {
+        dispatch({ type: 'CAPTURE_PHOTO', payload: { positionId, uri, roll } });
     }, []);
 
     const setCurrentProject = useCallback((project: PanoramaProject | null) => {

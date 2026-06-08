@@ -47,6 +47,8 @@ interface Props {
     positions: CapturePosition[];
     currentYaw: number;
     currentPitch: number;
+    currentRoll: number;
+    isLevel: boolean;
     targetPosition: CapturePosition | null;
     isAligned: boolean;
 }
@@ -96,10 +98,43 @@ function OrangeDot({ x, y }: { x: number; y: number }) {
 // ═══════════════════════════════════════════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+// INDICATEUR DE NIVEAU (roll) — style appareil photo
+// Une barre qui s'incline avec le téléphone. Verte quand droite, orange sinon.
+// L'assemblage suppose roll = 0 → c'est ce qui évite l'image penchée.
+// ═══════════════════════════════════════════════════════════════════════════
+function LevelIndicator({ roll, isLevel }: { roll: number; isLevel: boolean }) {
+    const cx = VF_LEFT + VF_W / 2;
+    const cy = VF_TOP + VF_H / 2;
+    const barW = VF_W * 0.55;
+    const color = isLevel ? '#22C55E' : ORANGE;
+    return (
+        <View style={{ ...StyleSheet.absoluteFillObject, zIndex: 24 }} pointerEvents="none">
+            {/* Repère fixe (référence horizontale) */}
+            <View style={{
+                position: 'absolute',
+                left: cx - barW / 2, top: cy,
+                width: barW, height: 2,
+                backgroundColor: 'rgba(255,255,255,0.35)',
+            }} />
+            {/* Barre qui suit l'inclinaison du téléphone */}
+            <View style={{
+                position: 'absolute',
+                left: cx - barW / 2, top: cy - 1.5,
+                width: barW, height: 3,
+                backgroundColor: color,
+                transform: [{ rotate: `${-roll}deg` }],
+            }} />
+        </View>
+    );
+}
+
 export default function CaptureGuideOverlay({
     positions,
     currentYaw,
     currentPitch,
+    currentRoll,
+    isLevel,
     targetPosition,
     isAligned,
 }: Props) {
@@ -135,6 +170,18 @@ export default function CaptureGuideOverlay({
             <View style={{ ...StyleSheet.absoluteFillObject, zIndex: 15 }} pointerEvents="none">
                 {showTarget && <OrangeDot x={targetX} y={targetY} />}
             </View>
+
+            {/* ── INDICATEUR DE NIVEAU (roll) ────────────── */}
+            <LevelIndicator roll={currentRoll} isLevel={isLevel} />
+
+            {/* ── AVERTISSEMENT « tenez droit » ────────────── */}
+            {!isLevel && (
+                <View style={styles.levelWarning} pointerEvents="none">
+                    <Text style={styles.levelWarningText}>
+                        Tenez le téléphone droit
+                    </Text>
+                </View>
+            )}
 
             {/* ── RÉTICULE CENTRAL ──────────────
                 Dessiné par-dessus la cible orange. S'anime s'il "avale" le point. */}
@@ -256,5 +303,23 @@ const styles = StyleSheet.create({
         ...StyleSheet.absoluteFillObject,
         backgroundColor: 'rgba(255,255,255,0.15)',
         zIndex: 30,
-    }
+    },
+
+    levelWarning: {
+        position: 'absolute',
+        top: VF_TOP - 44,
+        left: 0, right: 0,
+        alignItems: 'center',
+        zIndex: 26,
+    },
+    levelWarningText: {
+        color: '#FFFFFF',
+        backgroundColor: 'rgba(255,140,0,0.92)',
+        fontSize: 14,
+        fontWeight: '700',
+        paddingVertical: 6,
+        paddingHorizontal: 14,
+        borderRadius: 14,
+        overflow: 'hidden',
+    },
 });

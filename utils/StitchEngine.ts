@@ -33,6 +33,7 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
     uri: pos.uri!,
     yaw: pos.yaw,
     pitch: pos.pitch,
+    roll: pos.roll ?? 0,
     row: pos.row,
     col: pos.col,
     id: pos.id,
@@ -61,8 +62,8 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
         const CAM_HFOV = CAM_HFOV_DEG * Math.PI / 180;
         const CAM_VFOV = CAM_VFOV_DEG * Math.PI / 180;
         
-        // Reduced coverage boost: limits edge extrapolation artifacts
-        const COVERAGE_BOOST = 1.35;
+        // Lower boost = far less edge extrapolation = fewer radial smears.
+        const COVERAGE_BOOST = 1.12;
 
         const images = ${JSON.stringify(imageData)};
 
@@ -98,6 +99,26 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
         // (injected from utils/Geometry.ts so stitch & guidance can't drift)
         ${PROJECTION_JS}
 
+        // Roll-aware projection: project with the roll-0 basis, then undo the
+        // camera's in-image rotation. Done in tan-space (physical angles) so
+        // the differing H/V FOV doesn't distort the rotation. rollDeg = the
+        // device roll recorded when the photo was shot. This removes the
+        // zigzag/sheared straight lines at the seams.
+        const __tanH = Math.tan(CAM_HFOV_DEG * Math.PI / 360);
+        const __tanV = Math.tan(CAM_VFOV_DEG * Math.PI / 360);
+        function proj(dirYaw, dirPitch, camYaw, camPitch, rollDeg) {
+            const uv = worldToCamera(dirYaw, dirPitch, camYaw, camPitch, CAM_HFOV_DEG, CAM_VFOV_DEG);
+            if (!uv) return null;
+            if (!rollDeg) return uv;
+            const x = (uv.u - 0.5) * __tanH;
+            const y = (uv.v - 0.5) * __tanV;
+            const a = -rollDeg * Math.PI / 180;
+            const ca = Math.cos(a), sa = Math.sin(a);
+            const xr = x * ca - y * sa;
+            const yr = x * sa + y * ca;
+            return { u: 0.5 + xr / __tanH, v: 0.5 + yr / __tanV };
+        }
+
         /**
          * Euclidean feathering: circular blend zones, earlier start (30% from center),
          * smooth cosine falloff — eliminates boxy seam profiles from Chebyshev metric
@@ -105,13 +126,13 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
         function feather(u, v) {
             const du = Math.abs(u - 0.5) * 2; // 0 at center, 1 at edge
             const dv = Math.abs(v - 0.5) * 2;
-            // Euclidean distance for circular blend zones (no boxy seam profiles)
             const d = Math.min(1.0, Math.sqrt(du * du + dv * dv) / Math.SQRT2);
             if (d >= 1) return 0;
-            // Start fading at 30% from center
-            if (d < 0.3) return 1;
-            // Smooth cosine falloff over the remaining 70%
-            return 0.5 + 0.5 * Math.cos(Math.PI * (d - 0.3) / 0.7);
+            // Sharp center-biased weight: the photo whose centre is closest to
+            // this pixel dominates strongly, so misaligned overlaps no longer
+            // average into ghosts/doubles — while still feathering smoothly.
+            const t = 1 - d;
+            return t * t * t * t; // (1-d)^4
         }
 
         /**
@@ -188,6 +209,168 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
                     error: 'Aucune image chargée',
                 }));
                 return;
+            }
+
+            // ════════════════════════════════════════════════════════════
+            // Step 1.5: FEATURE-BASED POSE REFINEMENT (gyro-seeded bundle
+            // adjustment). The gyro gives a coarse (yaw,pitch) per photo;
+            // here we refine each photo by maximising image correlation in
+            // the overlap regions, then relax all corrections globally so
+            // they're mutually consistent. This is what removes the seams
+            // at low photo counts.
+            // ════════════════════════════════════════════════════════════
+            status.textContent = 'Recalage des images...';
+
+            const GW = 128, GH = 96; // tiny grayscale proxy per photo
+            const grays = [];
+            for (const pd of photoData) {
+                const d = pd.pixels.data, w = pd.w, h = pd.h;
+                const g = new Float32Array(GW * GH);
+                for (let y = 0; y < GH; y++) {
+                    const sy = Math.min(h - 1, (y / GH * h) | 0);
+                    for (let x = 0; x < GW; x++) {
+                        const sx = Math.min(w - 1, (x / GW * w) | 0);
+                        const i = (sy * w + sx) * 4;
+                        g[y * GW + x] = d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
+                    }
+                }
+                grays.push(g);
+            }
+
+            function grayAt(g, u, v) {
+                // bilinear sample of the small proxy, u,v in [0,1]
+                const fx = u * (GW - 1), fy = v * (GH - 1);
+                const x0 = fx | 0, y0 = fy | 0;
+                const x1 = Math.min(x0 + 1, GW - 1), y1 = Math.min(y0 + 1, GH - 1);
+                const dx = fx - x0, dy = fy - y0;
+                const a = g[y0*GW+x0], b = g[y0*GW+x1];
+                const c = g[y1*GW+x0], e = g[y1*GW+x1];
+                return a*(1-dx)*(1-dy) + b*dx*(1-dy) + c*(1-dx)*dy + e*dx*dy;
+            }
+
+            // Normalised cross-correlation of photos pi and pj when pj's pose
+            // is nudged by (ddy, ddp). Returns {score, n} (score in -1..1).
+            function pairNCC(pi, pj, ddy, ddp) {
+                const ai = photoData[pi].info, aj = photoData[pj].info;
+                const gi = grays[pi], gj = grays[pj];
+                let sx=0, sy=0, sxx=0, syy=0, sxy=0, n=0;
+                // sweep world directions around photo i's centre
+                for (let dy = -28; dy <= 28; dy += 3) {
+                    const pit = ai.pitch + dy;
+                    if (pit > 89 || pit < -89) continue;
+                    for (let dx = -34; dx <= 34; dx += 3) {
+                        const yaw = ai.yaw + dx / Math.max(0.25, Math.cos(pit*Math.PI/180));
+                        const ui = proj(yaw, pit, ai.yaw, ai.pitch, ai.roll || 0);
+                        if (!ui || ui.u<0.1 || ui.u>0.9 || ui.v<0.1 || ui.v>0.9) continue;
+                        const uj = proj(yaw, pit, aj.yaw + ddy, aj.pitch + ddp, aj.roll || 0);
+                        if (!uj || uj.u<0.1 || uj.u>0.9 || uj.v<0.1 || uj.v>0.9) continue;
+                        const a = grayAt(gi, ui.u, ui.v);
+                        const b = grayAt(gj, uj.u, uj.v);
+                        sx+=a; sy+=b; sxx+=a*a; syy+=b*b; sxy+=a*b; n++;
+                    }
+                }
+                if (n < 40) return { score: -2, n: n };
+                const cov = sxy/n - (sx/n)*(sy/n);
+                const vx = sxx/n - (sx/n)*(sx/n);
+                const vy = syy/n - (sy/n)*(sy/n);
+                if (vx < 1e-3 || vy < 1e-3) return { score: -2, n: n }; // flat → no info
+                return { score: cov / Math.sqrt(vx*vy), n: n };
+            }
+
+            // 1) Find overlapping pairs from the gyro pose
+            const pairs = [];
+            for (let i = 0; i < photoData.length; i++) {
+                for (let j = i+1; j < photoData.length; j++) {
+                    const a = photoData[i].info, b = photoData[j].info;
+                    let dY = Math.abs(a.yaw - b.yaw); if (dY > 180) dY = 360 - dY;
+                    const dP = Math.abs(a.pitch - b.pitch);
+                    const cosP = Math.max(0.25, Math.cos((a.pitch+b.pitch)/2*Math.PI/180));
+                    if (dY * cosP < CAM_HFOV_DEG * 0.95 && dP < CAM_VFOV_DEG * 1.05) {
+                        pairs.push([i, j]);
+                    }
+                }
+            }
+
+            // 2) Per-pair: coarse→fine search of the residual (dyaw,dpitch)
+            const meas = []; // {i,j,dy,dp,w}
+            for (let p = 0; p < pairs.length; p++) {
+                status.textContent = 'Recalage ' + (p+1) + '/' + pairs.length + '...';
+                const [i, j] = pairs[p];
+                let best = { s: -2, dy: 0, dp: 0 };
+                // Track the best score that is FAR (>=2°) from the winner.
+                // On repetitive textures (stripes, tiles) the NCC has several
+                // near-equal peaks → ambiguous → we must NOT trust it.
+                let secondFar = -2;
+                for (let dy = -4; dy <= 4; dy += 1)
+                    for (let dp = -4; dp <= 4; dp += 1) {
+                        const r = pairNCC(i, j, dy, dp);
+                        if (r.score > best.s) best = { s: r.score, dy: dy, dp: dp };
+                    }
+                for (let dy = -4; dy <= 4; dy += 1)
+                    for (let dp = -4; dp <= 4; dp += 1) {
+                        if (Math.abs(dy - best.dy) < 2 && Math.abs(dp - best.dp) < 2) continue;
+                        const r = pairNCC(i, j, dy, dp);
+                        if (r.score > secondFar) secondFar = r.score;
+                    }
+                if (best.s > -1) {
+                    const cy0 = best.dy, cp0 = best.dp;
+                    for (let dy = cy0-0.75; dy <= cy0+0.75; dy += 0.25)
+                        for (let dp = cp0-0.75; dp <= cp0+0.75; dp += 0.25) {
+                            const r = pairNCC(i, j, dy, dp);
+                            if (r.score > best.s) best = { s: r.score, dy: dy, dp: dp };
+                        }
+                }
+                // Trust the pair only if: well correlated, plausible shift,
+                // AND the peak clearly dominates other far candidates
+                // (rejects repetitive-pattern false matches).
+                const dominant = best.s - secondFar > 0.12;
+                if (best.s > 0.45 && dominant &&
+                    Math.abs(best.dy) <= 5 && Math.abs(best.dp) <= 5) {
+                    // weight de-rated by ambiguity → safer global solve
+                    const wq = best.s * Math.min(1, (best.s - secondFar) / 0.3);
+                    meas.push({ i: i, j: j, dy: best.dy, dp: best.dp, w: wq });
+                }
+            }
+
+            // 3) Global relaxation: solve per-photo corrections so that
+            //    (cj - ci) ≈ measured delta, weighted by correlation.
+            const corrYaw = new Float64Array(photoData.length);
+            const corrPit = new Float64Array(photoData.length);
+            for (let it = 0; it < 80; it++) {
+                const numY = new Float64Array(photoData.length);
+                const numP = new Float64Array(photoData.length);
+                const den = new Float64Array(photoData.length);
+                for (const m of meas) {
+                    // i wants: ci ≈ cj - delta ; j wants: cj ≈ ci + delta
+                    numY[m.i] += (corrYaw[m.j] - m.dy) * m.w;
+                    numP[m.i] += (corrPit[m.j] - m.dp) * m.w;
+                    den[m.i]  += m.w;
+                    numY[m.j] += (corrYaw[m.i] + m.dy) * m.w;
+                    numP[m.j] += (corrPit[m.i] + m.dp) * m.w;
+                    den[m.j]  += m.w;
+                }
+                for (let k = 0; k < photoData.length; k++) {
+                    if (den[k] > 0) {
+                        corrYaw[k] = numY[k] / den[k];
+                        corrPit[k] = numP[k] / den[k];
+                    }
+                }
+            }
+            // Pin the gauge: keep the panorama globally where the gyro put it
+            // (don't let the whole sphere drift). Remove mean correction.
+            let mY = 0, mP = 0;
+            for (let k = 0; k < photoData.length; k++) { mY += corrYaw[k]; mP += corrPit[k]; }
+            mY /= photoData.length; mP /= photoData.length;
+            for (let k = 0; k < photoData.length; k++) {
+                let cy = corrYaw[k] - mY, cp = corrPit[k] - mP;
+                // safety clamp so a bad pair can never wreck the pano
+                cy = Math.max(-8, Math.min(8, cy));
+                cp = Math.max(-8, Math.min(8, cp));
+                photoData[k].info = {
+                    ...photoData[k].info,
+                    yaw: photoData[k].info.yaw + cy,
+                    pitch: photoData[k].info.pitch + cp,
+                };
             }
 
             // Step 2: Neighbor-aware exposure normalization
@@ -276,7 +459,8 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
                             if (Math.abs(dYaw) > CAM_HFOV_DEG * COVERAGE_BOOST || Math.abs(dPitch) > CAM_VFOV_DEG * COVERAGE_BOOST) continue;
 
                             // Project world direction into this camera
-                            const uv = worldToCamera(dir.yaw, dir.pitch, cam.yaw, cam.pitch, CAM_HFOV_DEG, CAM_VFOV_DEG);
+                            // (roll-aware: undoes the phone tilt at capture).
+                            const uv = proj(dir.yaw, dir.pitch, cam.yaw, cam.pitch, cam.roll || 0);
                             if (!uv) continue;
 
                             const { u, v } = uv;
@@ -336,10 +520,13 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
                     }
                 }
 
-                // Step 5: Aggressive gap fill with larger initial radius
+                // Step 5: GENTLE gap fill. Small radius / few passes only.
+                // Big holes (polar caps with no photo) are intentionally left
+                // for the soft neutral gradient below — a clean grey cap looks
+                // far better than long radial smears of stretched pixels.
                 status.textContent = 'Correction des trous (' + uncoveredCount + ' pixels)...';
-                
-                for (let pass = 0; pass < 20; pass++) {
+
+                for (let pass = 0; pass < 6; pass++) {
                     let filled = 0;
                     for (let y = 0; y < EQ_H; y++) {
                         for (let x = 0; x < EQ_W; x++) {
@@ -347,7 +534,7 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
                             if (od[idx + 3] > 0) continue;
 
                             let sumR = 0, sumG = 0, sumB = 0, count = 0;
-                            const r = pass < 3 ? 2 : (pass < 8 ? 3 : (pass < 14 ? 5 : 8));
+                            const r = pass < 3 ? 2 : 3;
 
                             for (let dy = -r; dy <= r; dy++) {
                                 for (let dx = -r; dx <= r; dx++) {
