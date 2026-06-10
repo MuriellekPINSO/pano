@@ -627,6 +627,17 @@ export default function CaptureScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* Parallax tip — horizon row only. No depth sensor available so we
+          prompt the user to stand in the center rather than trying to detect it. */}
+      {targetPosition?.row === 0 && isReady && (
+        <View style={styles.parallaxTip}>
+          <MaterialIcons name="warning" size={13} color="#F59E0B" />
+          <Text style={styles.parallaxTipText}>
+            Reste au centre de la pièce · réduit le parallaxe
+          </Text>
+        </View>
+      )}
+
       {/* ── CAPTURE BUTTON ──
           Teleport has NO visible shutter button — capture is auto-triggered.
           We keep a minimal button below the frame for manual fallback. */}
@@ -1110,5 +1121,23 @@ const styles = StyleSheet.create({
   },
   modalCancel: {
     marginTop: 14,
+  },
+  parallaxTip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "rgba(245,158,11,0.12)",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginBottom: 8,
+    marginHorizontal: 20,
+    borderWidth: 1,
+    borderColor: "rgba(245,158,11,0.25)",
+  },
+  parallaxTipText: {
+    color: "#F59E0B",
+    fontSize: 11,
+    fontWeight: "500",
   },
 });

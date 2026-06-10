@@ -249,9 +249,16 @@ export function matchNeighbors(
   // Combined score (edge match is more specific, weight it more)
   const combined = edgeScore * 0.65 + hammingScore * 0.35;
 
-  const quality: 'good' | 'fair' | 'poor' =
+  let quality: 'good' | 'fair' | 'poor' =
     combined > 0.70 ? 'good' :
     combined > 0.45 ? 'fair' : 'poor';
+
+  // Low-contrast scenes (white walls, dark rooms) produce false-positive edge
+  // matches — edges look identical because they're both featureless, not because
+  // the photos actually overlap correctly. Gyroscope takes over in these cases.
+  if (Math.min(fpA.contrast, fpB.contrast) < 15 && quality === 'good') {
+    quality = 'fair';
+  }
 
   return {
     positionIdA: fpA.positionId,

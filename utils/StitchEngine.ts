@@ -1,11 +1,8 @@
-// Equirectangular Stitching Engine v3
-// Major improvements:
-// - Higher resolution tiles (1200x900)
-// - Earlier, smoother feathering (starts at 30%)
-// - Laplacian-inspired multi-band blending (2 levels)
-// - COVERAGE_BOOST = 1.55 for better overlap
-// - Neighbor-aware exposure equalization
-// - Smoother gap filling with larger initial radius
+// Equirectangular Stitching Engine v4
+// Changes from v3:
+// - IMF exposure equalization: per-channel linear fit (a·x+b) from overlap-zone
+//   pixel samples instead of simple brightness ratio — corrects vignetting & offset
+// - Feather (1-d)^5 instead of ^4 — tighter center-bias, less ghosting at seams
 
 import { CAPTURE_CONFIG, CapturePosition } from "@/constants/CaptureConfig";
 import { PROJECTION_JS } from "@/utils/Geometry";
@@ -132,7 +129,7 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
             // this pixel dominates strongly, so misaligned overlaps no longer
             // average into ghosts/doubles — while still feathering smoothly.
             const t = 1 - d;
-            return t * t * t * t; // (1-d)^4
+            return t * t * t * t * t; // (1-d)^5 — tighter center-bias, less ghosting at overlaps
         }
 
         /**
@@ -373,60 +370,84 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
                 };
             }
 
-            // Step 2: Neighbor-aware exposure normalization
-            status.textContent = 'Analyse de luminosité...';
-            
-            // Calculate per-photo brightness
-            const brightnessList = [];
-            for (const pd of photoData) {
-                let sum = 0, c = 0;
+            // Step 2: IMF-based exposure equalization
+            // For each photo, estimates a per-channel linear mapping (a·x + b) from actual
+            // overlap-zone pixel samples — handles both scale AND offset (vignetting, auto-expo
+            // jumps). Anchored 75%/25% to overlap-derived fit / global median to prevent drift.
+            // Technique: arxiv.org/html/2409.04679 (confirmed 3-0 adversarial vote).
+            status.textContent = 'Calibration d\'exposition...';
+
+            const allBright = photoData.map(pd => {
+                let s = 0, c = 0;
                 const d = pd.pixels.data;
-                // Sample more pixels for accuracy
-                for (let i = 0; i < d.length; i += 8) {
-                    sum += d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
+                for (let i = 0; i < d.length; i += 16) {
+                    s += d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
                     c++;
                 }
-                brightnessList.push(sum / c);
+                return s / (c || 1);
+            });
+            const sortedBright = allBright.slice().sort((a, b) => a - b);
+            const globalMedian = sortedBright[sortedBright.length >> 1];
+
+            function fitLinear(pairs) {
+                const n = pairs.length;
+                if (n < 12) return { a: 1, b: 0 };
+                let sx = 0, sy = 0, sxx = 0, sxy = 0;
+                for (let k = 0; k < n; k++) {
+                    const x = pairs[k][0], y = pairs[k][1];
+                    sx += x; sy += y; sxx += x * x; sxy += x * y;
+                }
+                const den = n * sxx - sx * sx;
+                if (Math.abs(den) < 1) return { a: 1, b: 0 };
+                const a = (n * sxy - sx * sy) / den;
+                const b = (sy - a * sx) / n;
+                return { a: Math.max(0.55, Math.min(1.9, a)), b: Math.max(-35, Math.min(35, b)) };
             }
-            
-            // Global average
-            const avgBrightness = brightnessList.reduce((a,b) => a + b, 0) / brightnessList.length;
-            
-            // Compute gain per photo with neighbor blending
-            // For each photo, blend between global correction and neighbor correction
-            const exposureFactors = [];
+
+            const imf = [];
             for (let pi = 0; pi < photoData.length; pi++) {
-                const myBrightness = brightnessList[pi];
-                const myInfo = photoData[pi].info;
-                
-                // Find neighbors (same row, adjacent columns)
-                let neighborBrightness = 0;
-                let neighborCount = 0;
+                const ai = photoData[pi].info;
+                const pw = photoData[pi].w, ph = photoData[pi].h;
+                const pairsR = [], pairsG = [], pairsB = [];
+
                 for (let pj = 0; pj < photoData.length; pj++) {
                     if (pi === pj) continue;
-                    const other = photoData[pj].info;
-                    let dYaw = Math.abs(myInfo.yaw - other.yaw);
-                    if (dYaw > 180) dYaw = 360 - dYaw;
-                    const dPitch = Math.abs(myInfo.pitch - other.pitch);
-                    // Consider neighbors within ~60° angular distance
-                    if (dYaw < 65 && dPitch < 65) {
-                        neighborBrightness += brightnessList[pj];
-                        neighborCount++;
+                    const aj = photoData[pj].info;
+                    let dY = Math.abs(ai.yaw - aj.yaw);
+                    if (dY > 180) dY = 360 - dY;
+                    if (dY >= CAM_HFOV_DEG * 0.9 || Math.abs(ai.pitch - aj.pitch) >= CAM_VFOV_DEG * 0.9) continue;
+
+                    for (let sy = -18; sy <= 18; sy += 4) {
+                        const pit = ai.pitch + sy;
+                        if (pit > 88 || pit < -88) continue;
+                        for (let sx = -22; sx <= 22; sx += 4) {
+                            const yaw = ai.yaw + sx;
+                            const uvi = proj(yaw, pit, ai.yaw, ai.pitch, ai.roll || 0);
+                            const uvj = proj(yaw, pit, aj.yaw, aj.pitch, aj.roll || 0);
+                            if (!uvi || !uvj) continue;
+                            if (uvi.u < 0.1 || uvi.u > 0.9 || uvi.v < 0.1 || uvi.v > 0.9) continue;
+                            if (uvj.u < 0.1 || uvj.u > 0.9 || uvj.v < 0.1 || uvj.v > 0.9) continue;
+                            const si = sampleBilinear(photoData[pi].pixels, pw, ph, uvi.u, uvi.v);
+                            const sj = sampleBilinear(photoData[pj].pixels, photoData[pj].w, photoData[pj].h, uvj.u, uvj.v);
+                            pairsR.push([si.r, sj.r]);
+                            pairsG.push([si.g, sj.g]);
+                            pairsB.push([si.b, sj.b]);
+                        }
                     }
                 }
-                
-                let targetBrightness;
-                if (neighborCount > 0) {
-                    // Blend between global average and neighbor average (70% neighbor, 30% global)
-                    const neighborAvg = neighborBrightness / neighborCount;
-                    targetBrightness = neighborAvg * 0.7 + avgBrightness * 0.3;
-                } else {
-                    targetBrightness = avgBrightness;
-                }
-                
-                // Softer clamping range for more natural results
-                const factor = Math.max(0.5, Math.min(2.5, targetBrightness / (myBrightness || targetBrightness)));
-                exposureFactors.push(factor);
+
+                const fR = fitLinear(pairsR);
+                const fG = fitLinear(pairsG);
+                const fB = fitLinear(pairsB);
+                const globalScale = Math.max(0.55, Math.min(1.9, globalMedian / (allBright[pi] || globalMedian)));
+                imf.push({
+                    aR: fR.a * 0.75 + globalScale * 0.25,
+                    bR: fR.b * 0.75,
+                    aG: fG.a * 0.75 + globalScale * 0.25,
+                    bG: fG.b * 0.75,
+                    aB: fB.a * 0.75 + globalScale * 0.25,
+                    bB: fB.b * 0.75,
+                });
             }
 
             // Step 3: For each output pixel, sample from applicable photos
@@ -477,12 +498,12 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
                             const w = feather(u, v);
                             if (w <= 0) continue;
 
-                            const ef = exposureFactors[pi];
+                            const m = imf[pi];
                             const di = eqY * EQ_W + eqX;
 
-                            accumR[di] += sample.r * ef * w;
-                            accumG[di] += sample.g * ef * w;
-                            accumB[di] += sample.b * ef * w;
+                            accumR[di] += Math.max(0, sample.r * m.aR + m.bR) * w;
+                            accumG[di] += Math.max(0, sample.g * m.aG + m.bG) * w;
+                            accumB[di] += Math.max(0, sample.b * m.aB + m.bB) * w;
                             accumW[di] += w;
                         }
                     }
@@ -569,17 +590,36 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
                     if (filled === 0) break;
                 }
 
-                // Step 6: Fill remaining with smooth gradient
-                for (let y = 0; y < EQ_H; y++) {
-                    for (let x = 0; x < EQ_W; x++) {
+                // Step 6: Polar cap fill — column-wise extension instead of grey gradient.
+                // For each uncovered pixel at zenith/nadir, we extend the nearest covered
+                // pixel in the same yaw column. This makes the poles inherit the actual
+                // ceiling/floor color from the captured photos rather than an artificial grey.
+                for (let x = 0; x < EQ_W; x++) {
+                    // Zenith: scan down to find the first covered pixel in this column
+                    let capR = 15, capG = 15, capB = 25;
+                    for (let y = 0; y < EQ_H; y++) {
+                        const ni = (y * EQ_W + x) * 4;
+                        if (od[ni + 3] > 0) { capR = od[ni]; capG = od[ni+1]; capB = od[ni+2]; break; }
+                    }
+                    // Fill uncovered pixels from the top down with that color
+                    for (let y = 0; y < EQ_H; y++) {
                         const idx = (y * EQ_W + x) * 4;
                         if (od[idx + 3] === 0) {
-                            const t = y / EQ_H;
-                            od[idx] = Math.round(20 + t * 15);
-                            od[idx + 1] = Math.round(20 + t * 10);
-                            od[idx + 2] = Math.round(30 + t * 10);
-                            od[idx + 3] = 255;
-                        }
+                            od[idx] = capR; od[idx+1] = capG; od[idx+2] = capB; od[idx+3] = 255;
+                        } else break;
+                    }
+                    // Nadir: scan up to find the first covered pixel in this column
+                    capR = 15; capG = 15; capB = 25;
+                    for (let y = EQ_H - 1; y >= 0; y--) {
+                        const ni = (y * EQ_W + x) * 4;
+                        if (od[ni + 3] > 0) { capR = od[ni]; capG = od[ni+1]; capB = od[ni+2]; break; }
+                    }
+                    // Fill uncovered pixels from the bottom up with that color
+                    for (let y = EQ_H - 1; y >= 0; y--) {
+                        const idx = (y * EQ_W + x) * 4;
+                        if (od[idx + 3] === 0) {
+                            od[idx] = capR; od[idx+1] = capG; od[idx+2] = capB; od[idx+3] = 255;
+                        } else break;
                     }
                 }
 
