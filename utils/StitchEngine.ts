@@ -375,7 +375,7 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
             // overlap-zone pixel samples — handles both scale AND offset (vignetting, auto-expo
             // jumps). Anchored 75%/25% to overlap-derived fit / global median to prevent drift.
             // Technique: arxiv.org/html/2409.04679 (confirmed 3-0 adversarial vote).
-            status.textContent = 'Calibration d\'exposition...';
+            status.textContent = "Calibration d'exposition...";
 
             const allBright = photoData.map(pd => {
                 let s = 0, c = 0;
