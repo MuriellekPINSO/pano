@@ -1,11 +1,10 @@
-// Hidden WebView component that performs the stitching
-// Renders off-screen, processes the canvas, and returns the result
+// Composant qui délègue l'assemblage du panorama au backend FastAPI
+// (remplace l'ancien pipeline WebView côté client)
 
 import { CapturePosition } from '@/constants/CaptureConfig';
-import { generateStitchHTML, prepareImagesForStitch, saveBase64Image } from '@/utils/StitchEngine';
-import React, { useCallback, useRef, useState } from 'react';
+import { checkBackendHealth, stitchOnBackend } from '@/utils/BackendStitcher';
+import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
-import { WebView } from 'react-native-webview';
 
 interface StitchProcessorProps {
     positions: CapturePosition[];
@@ -22,83 +21,60 @@ export default function StitchProcessor({
     onError,
     onProgress,
 }: StitchProcessorProps) {
-    const webViewRef = useRef<WebView>(null);
-    const [html, setHtml] = useState<string | null>(null);
     const [status, setStatus] = useState('Préparation des images...');
     const processedRef = useRef(false);
 
-    // Prepare images and generate HTML
-    React.useEffect(() => {
+    useEffect(() => {
         let cancelled = false;
 
-        async function prepare() {
-            try {
-                setStatus('Lecture des images...');
-                onProgress?.('Lecture des images...');
+        async function process() {
+            if (processedRef.current) return;
+            processedRef.current = true;
 
-                const preparedPositions = await prepareImagesForStitch(positions);
+            try {
+                setStatus('Vérification du serveur...');
+                onProgress?.('Vérification du serveur...');
+
+                const isHealthy = await checkBackendHealth();
+                if (!isHealthy) {
+                    throw new Error(
+                        "Le serveur d'assemblage est injoignable. Vérifiez que le backend FastAPI est démarré et que BACKEND_URL pointe vers la bonne adresse."
+                    );
+                }
 
                 if (cancelled) return;
 
-                setStatus('Assemblage en cours...');
-                onProgress?.('Assemblage en cours...');
+                const panoramaUri = await stitchOnBackend(positions, projectId, (message) => {
+                    if (!cancelled) {
+                        setStatus(message);
+                        onProgress?.(message);
+                    }
+                });
 
-                const stitchHTML = generateStitchHTML(preparedPositions);
-                setHtml(stitchHTML);
+                if (cancelled) return;
+
+                if (!panoramaUri) {
+                    throw new Error("Le serveur n'a retourné aucun panorama.");
+                }
+
+                onComplete(panoramaUri);
             } catch (err: any) {
-                onError(err.message || 'Failed to prepare images');
+                if (!cancelled) {
+                    onError(err.message || "Échec de l'assemblage sur le serveur");
+                }
             }
         }
 
-        prepare();
-        return () => { cancelled = true; };
-    }, [positions]);
-
-    const handleMessage = useCallback(async (event: any) => {
-        if (processedRef.current) return;
-
-        try {
-            const data = JSON.parse(event.nativeEvent.data);
-
-            if (data.type === 'STITCH_COMPLETE') {
-                processedRef.current = true;
-                setStatus('Sauvegarde du panorama...');
-                onProgress?.('Sauvegarde du panorama...');
-
-                const uri = await saveBase64Image(data.dataUrl, projectId);
-                onComplete(uri);
-            } else if (data.type === 'STITCH_ERROR') {
-                onError(data.error);
-            }
-        } catch (err: any) {
-            onError(err.message || 'Stitching failed');
-        }
-    }, [projectId, onComplete, onError]);
-
-    if (!html) {
-        return (
-            <View style={styles.container}>
-                <ActivityIndicator size="large" color="#6C63FF" />
-                <Text style={styles.statusText}>{status}</Text>
-            </View>
-        );
-    }
+        process();
+        return () => {
+            cancelled = true;
+        };
+    }, [positions, projectId]);
 
     return (
         <View style={styles.container}>
             <ActivityIndicator size="large" color="#6C63FF" />
             <Text style={styles.statusText}>{status}</Text>
-
-            {/* Hidden WebView that does the actual stitching */}
-            <WebView
-                ref={webViewRef}
-                source={{ html }}
-                style={styles.hiddenWebView}
-                onMessage={handleMessage}
-                javaScriptEnabled
-                originWhitelist={['*']}
-                onError={(e) => onError(e.nativeEvent.description)}
-            />
         </View>
     );
 }
@@ -114,11 +90,5 @@ const styles = StyleSheet.create({
         color: 'rgba(255, 255, 255, 0.6)',
         fontSize: 14,
         fontWeight: '500',
-    },
-    hiddenWebView: {
-        width: 1,
-        height: 1,
-        opacity: 0,
-        position: 'absolute',
     },
 });
