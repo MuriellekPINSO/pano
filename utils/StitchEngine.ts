@@ -3,9 +3,11 @@
 // - IMF exposure equalization: per-channel linear fit (a·x+b) from overlap-zone
 //   pixel samples instead of simple brightness ratio — corrects vignetting & offset
 // - Feather (1-d)^5 instead of ^4 — tighter center-bias, less ghosting at seams
+// - Coverage analysis: pre-stitch diagnostic to detect gaps and missing zones
 
 import { CAPTURE_CONFIG, CapturePosition } from "@/constants/CaptureConfig";
 import { PROJECTION_JS } from "@/utils/Geometry";
+import { analyzeCoverage, formatCoverageReport } from "@/utils/CoverageAnalyzer";
 import * as FileSystem from "expo-file-system/legacy";
 
 // Output dimensions. 4096×2048 = 8.4M px and the per-pixel loop tested every
@@ -26,6 +28,26 @@ export interface StitchResult {
 export function generateStitchHTML(positions: CapturePosition[]): string {
   const capturedPositions = positions.filter((p) => p.captured && p.uri);
 
+  // ════════════════════════════════════════════════════════════════════════
+  // PRE-STITCH DIAGNOSTIC: Analyze coverage and log warnings
+  // ════════════════════════════════════════════════════════════════════════
+  const coverageReport = analyzeCoverage(
+    positions,
+    CAPTURE_CONFIG.CAMERA_HFOV,
+    CAPTURE_CONFIG.CAMERA_VFOV,
+    0.35 // target overlap 35%
+  );
+
+  // Log report to console for debugging
+  const reportText = formatCoverageReport(coverageReport);
+  console.log(reportText);
+
+  // Encode warnings/recommendations as JSON for passing to WebView
+  const diagnosticData = {
+    coverageReport,
+    timestamp: new Date().toISOString(),
+  };
+
   const imageData = capturedPositions.map((pos) => ({
     uri: pos.uri!,
     yaw: pos.yaw,
@@ -42,13 +64,17 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
-        body { margin: 0; background: #000; }
+        body { margin: 0; background: #000; font-family: sans-serif; }
         canvas { display: none; }
-        #status { color: white; font-family: sans-serif; padding: 20px; font-size: 14px; }
+        #status { color: white; padding: 20px; font-size: 14px; line-height: 1.6; }
+        .diagnostic { color: #FFD700; background: rgba(255,215,0,0.1); padding: 10px; margin: 10px 0; border-left: 3px solid #FFD700; border-radius: 3px; }
+        .warning { color: #FF6B6B; }
+        .ok { color: #51CF66; }
     </style>
 </head>
 <body>
     <div id="status">Initialisation...</div>
+    <div id="diagnostic" class="diagnostic"></div>
     <canvas id="canvas"></canvas>
     <canvas id="tempCanvas"></canvas>
     <script>
@@ -63,6 +89,7 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
         const COVERAGE_BOOST = 1.12;
 
         const images = ${JSON.stringify(imageData)};
+        const diagnosticData = ${JSON.stringify(diagnosticData)};
 
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
@@ -79,6 +106,7 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
         const accumW = new Float32Array(EQ_W * EQ_H);
 
         const status = document.getElementById('status');
+        const diagnosticDiv = document.getElementById('diagnostic');
 
         function deg2rad(d) { return d * Math.PI / 180; }
 
@@ -173,7 +201,28 @@ export function generateStitchHTML(positions: CapturePosition[]): string {
             });
         }
 
+        function displayDiagnostics() {
+            const rep = diagnosticData.coverageReport;
+            let html = '<strong>📊 Analyse de couverture:</strong><br>';
+            html += \`📸 \${rep.capturedPhotos}/\${rep.totalPhotos} photos capturées<br>\`;
+            html += \`🔄 YAW: \${rep.yawCovered ? '✅ 360°' : '❌ Incomplet'} (min écart: \${rep.yawGapsDegrees.length > 0 ? Math.max(...rep.yawGapsDegrees).toFixed(1) : 'N/A'}°)<br>\`;
+            html += \`⬆️  PITCH: \${rep.pitchMin.toFixed(0)}° → \${rep.pitchMax.toFixed(0)}° (zénith: \${rep.hasZenith ? '✅' : '❌'}, nadir: \${rep.hasNadir ? '✅' : '❌'})<br>\`;
+            html += \`🔗 Overlap: min=\${rep.minOverlapPercent.toFixed(1)}% (cible: ≥30%)<br>\`;
+            
+            if (rep.warnings.length > 0) {
+              html += '<div class="warning"><strong>⚠️ Avertissements:</strong><br>';
+              rep.warnings.forEach(w => { html += '• ' + w + '<br>'; });
+              html += '</div>';
+            } else {
+              html += '<div class="ok"><strong>✅ Tous les critères OK</strong></div>';
+            }
+            
+            diagnosticDiv.innerHTML = html;
+        }
+
         async function stitchPanorama() {
+            displayDiagnostics();
+            
             status.textContent = 'Chargement des images...';
             const photoData = [];
 
