@@ -24,6 +24,7 @@ adapté à FastAPI — c'est un service séparé.
 ============================================================================
 """
 
+import logging
 import os
 import shutil
 import uuid
@@ -37,7 +38,10 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from asset_prep import DEFAULT_PROFILES, prepare_assets
+from oriented_pipeline import measure_real_coverage, run_oriented_pipeline
 from stitching_pipeline import PipelineConfig, check_seam_continuity, run_auto_pipeline, run_manual_pipeline
+
+log = logging.getLogger(__name__)
 
 app = FastAPI(
     title="API Rendu 360°",
@@ -91,25 +95,75 @@ async def stitch_photos(
     for f in files:
         if not f.content_type or not f.content_type.startswith("image/"):
             continue
-        dest = os.path.join(input_dir, f.filename)
+        # `filename` est fourni par le client : sans basename(), un nom du type
+        # « ../../x.jpg » écrirait hors du dossier du job. On garde le nom (il
+        # porte row/col/roll, dont dépend le pipeline orienté) mais jamais le
+        # chemin.
+        safe_name = os.path.basename(f.filename or "").lstrip(".")
+        if not safe_name:
+            continue
+        dest = os.path.join(input_dir, safe_name)
         with open(dest, "wb") as out:
             shutil.copyfileobj(f.file, out)
 
     cfg = PipelineConfig(blend_mode=blend_mode, output_width=output_width, output_height=output_height)
-    pipeline_fn = run_auto_pipeline if mode == "auto" else run_manual_pipeline
-    ok = pipeline_fn(input_dir, output_path, cfg)
+
+    # L'app connaît l'orientation de chaque photo et l'encode dans le nom du
+    # fichier (pos_<id>_r<row>_c<col>_k<roll>.jpg). On projette donc sur la
+    # sphère : aucune homographie, donc aucune dérive cumulative, et insensible
+    # aux textures répétitives (carrelage, moquette...).
+    # Les pipelines par appariement restent en repli pour les uploads dont les
+    # noms ne portent pas de position de grille.
+    attempts = [
+        ("oriented", run_oriented_pipeline),
+        ("auto", run_auto_pipeline),
+        ("manual", run_manual_pipeline),
+    ]
+    if mode == "manual":
+        attempts = [("manual", run_manual_pipeline)] + attempts[:2]
+
+    ok = False
+    used_mode = None
+    tried = []
+    for label, fn in attempts:
+        tried.append(label)
+        try:
+            ok = fn(input_dir, output_path, cfg)
+        except Exception as exc:
+            log.error("Pipeline %s — exception : %s", label, exc)
+            ok = False
+        if ok and os.path.exists(output_path):
+            used_mode = label
+            break
+        log.warning("Pipeline %s — échec, tentative suivante s'il en reste", label)
+
+    if not used_mode:
+        # On garde les sources pour pouvoir rejouer le diagnostic sans
+        # demander une nouvelle capture à l'utilisateur.
+        raise HTTPException(
+            422,
+            "Échec de l'assemblage avec les pipelines "
+            f"{' puis '.join(tried)} : chevauchement insuffisant entre les photos, "
+            "ou images trop peu texturées. "
+            f"Photos conservées pour diagnostic (job {job_id}).",
+        )
 
     shutil.rmtree(os.path.dirname(input_dir), ignore_errors=True)
 
-    if not ok or not os.path.exists(output_path):
-        raise HTTPException(
-            422,
-            "Échec de l'assemblage : chevauchement insuffisant entre les photos, "
-            "ou images trop peu texturées. Essayez mode='manual'.",
-        )
-
     panorama = cv2.imread(output_path)
     score = check_seam_continuity(panorama) if panorama is not None else None
+
+    # Deux indicateurs, parce que chacun pris seul induit en erreur :
+    #  - seam_continuity_score ne compare que 20 px aux bords ; sur un panorama
+    #    troué, deux zones noires se corrèlent parfaitement et le gonflent ;
+    #  - compter les pixels non-noirs ne suffit pas non plus : une zone étirée
+    #    par une homographie divergente est non-noire mais vide d'information.
+    # real_detail mesure le gradient local : c'est le seul chiffre fiable.
+    coverage = None
+    real_detail = None
+    if panorama is not None:
+        coverage = float((panorama.sum(axis=2) > 0).mean())
+        real_detail = measure_real_coverage(panorama)
 
     return {
         "job_id": job_id,
@@ -117,6 +171,9 @@ async def stitch_photos(
         "width": output_width,
         "height": output_height,
         "seam_continuity_score": round(score, 3) if score is not None else None,
+        "coverage": round(coverage, 3) if coverage is not None else None,
+        "real_detail": round(real_detail, 3) if real_detail is not None else None,
+        "mode_used": used_mode,
     }
 
 

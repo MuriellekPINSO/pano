@@ -45,8 +45,35 @@ export async function checkBackendHealth(): Promise<boolean> {
 }
 
 /**
+ * Met en forme le champ `detail` d'une erreur FastAPI.
+ *
+ * FastAPI renvoie deux formes différentes :
+ *   - HTTPException(422, "message")  -> detail = "message" (chaîne)
+ *   - erreur de validation de requête -> detail = [{ loc, msg, ... }] (tableau)
+ *
+ * Interpoler le tableau directement produisait « [object Object] », ce qui
+ * masquait le vrai message.
+ */
+function formatBackendDetail(detail: unknown): string | undefined {
+  if (!detail) return undefined;
+  if (typeof detail === 'string') return detail;
+
+  if (Array.isArray(detail)) {
+    const parts = detail.map((item) => {
+      if (typeof item === 'string') return item;
+      const loc = Array.isArray(item?.loc) ? item.loc.join('.') : undefined;
+      const msg = item?.msg ?? JSON.stringify(item);
+      return loc ? `${loc} : ${msg}` : String(msg);
+    });
+    return parts.join(' | ');
+  }
+
+  return JSON.stringify(detail);
+}
+
+/**
  * Upload les photos capturées au backend et lance le stitching
- * 
+ *
  * @param positions - Positions capturées (avec URIs)
  * @param projectId - ID du projet (pour le nommage)
  * @param onProgress - Callback pour les mises à jour de progression
@@ -70,29 +97,53 @@ export async function stitchOnBackend(
     onProgress?.('Upload des images...');
     const formData = new FormData();
 
+    // React Native ne sérialise pas les Blob en multipart : il faut lui passer
+    // directement { uri, name, type } et il lit le fichier depuis le disque.
+    let attached = 0;
+    const skipped: string[] = [];
+
     for (const pos of capturedPositions) {
       if (!pos.uri) continue;
 
       try {
-        // Lire l'image en base64 depuis le disque
-        const base64 = await FileSystem.readAsStringAsync(pos.uri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
+        const info = await FileSystem.getInfoAsync(pos.uri);
+        if (!info.exists) {
+          skipped.push(`${pos.id} (fichier absent)`);
+          continue;
+        }
 
-        // Créer un Blob à partir du base64
-        const blob = new Blob(
-          [Uint8Array.from(atob(base64), c => c.charCodeAt(0))],
-          { type: 'image/jpeg' }
-        );
+        // Le roll mesuré au déclenchement voyage dans le NOM du fichier.
+        // Le backend conserve les sources d'un job en échec pour rejouer le
+        // diagnostic (cf. main.py) : un nom auto-descriptif permet de relancer
+        // l'assemblage sur un dossier seul, sans métadonnée annexe.
+        // Absent (projets capturés avant cette version) => le backend lit 0.
+        const roll = Number.isFinite(pos.roll) ? (pos.roll as number) : 0;
+        const filename =
+          `pos_${pos.id}_r${pos.row}_c${pos.col}_k${roll.toFixed(1)}.jpg`;
+        formData.append('files', {
+          uri: pos.uri,
+          name: filename,
+          type: 'image/jpeg',
+        } as any);
 
-        // Ajouter au formulaire avec un nom standardisé
-        const filename = `pos_${pos.id}_r${pos.row}_c${pos.col}.jpg`;
-        formData.append('files', blob, filename);
-
-        onProgress?.(`Upload : ${capturedPositions.indexOf(pos) + 1}/${capturedPositions.length}`);
+        attached += 1;
+        onProgress?.(`Upload : ${attached}/${capturedPositions.length}`);
       } catch (err) {
-        console.warn(`Impossible de lire ${pos.uri}:`, err);
+        skipped.push(`${pos.id} (${err instanceof Error ? err.message : String(err)})`);
       }
+    }
+
+    // Sans ce garde-fou, une requête vide partait quand même et le backend
+    // répondait « files: Field required » — erreur illisible côté app.
+    if (attached < 2) {
+      throw new Error(
+        `Seulement ${attached} photo(s) sur ${capturedPositions.length} ont pu être jointes. ` +
+        `Ignorées : ${skipped.join(', ') || 'aucune raison rapportée'}`
+      );
+    }
+
+    if (skipped.length > 0) {
+      console.warn(`${skipped.length} photo(s) ignorée(s) :`, skipped);
     }
 
     // Étape 3 : Ajouter les paramètres
@@ -116,7 +167,7 @@ export async function stitchOnBackend(
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       throw new Error(
-        errorData.detail || 
+        formatBackendDetail(errorData.detail) ||
         `Erreur stitching (${response.status}): ${response.statusText}`
       );
     }
