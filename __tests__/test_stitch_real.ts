@@ -13,8 +13,9 @@ const html = generateStitchHTML(mockPositions);
 // Extract the script tag content from the HTML
 const scriptMatch = html.match(/<script>([\s\S]*?)<\/script>/);
 if (!scriptMatch) {
-  console.error('Could not find script tag in HTML!');
-  process.exit(1);
+  // `throw` plutôt que process.exit : TypeScript sait qu'il interrompt le flux,
+  // donc scriptMatch est bien non-null en dessous.
+  throw new Error('Could not find script tag in HTML!');
 }
 
 const jsCode = scriptMatch[1];

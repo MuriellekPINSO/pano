@@ -67,7 +67,7 @@ export default function CaptureProgressIndicator({
                   borderRightColor: '#666',
                 },
               ]}
-              title={`${yawStart.toFixed(0)}°`}
+              accessibilityLabel={`${yawStart.toFixed(0)}°`}
             />
           );
         })}

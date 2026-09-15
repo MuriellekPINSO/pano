@@ -109,7 +109,7 @@ function LevelIndicator({ roll, isLevel }: { roll: number; isLevel: boolean }) {
     const barW = VF_W * 0.55;
     const color = isLevel ? '#22C55E' : ORANGE;
     return (
-        <View style={{ ...StyleSheet.absoluteFillObject, zIndex: 24 }} pointerEvents="none">
+        <View style={{ ...StyleSheet.absoluteFill, zIndex: 24 }} pointerEvents="none">
             {/* Repère fixe (référence horizontale) */}
             <View style={{
                 position: 'absolute',
@@ -167,7 +167,7 @@ export default function CaptureGuideOverlay({
 
             {/* ── CIBLE (POINT ORANGE UNIQUE) ──────────────
                 Style Street View : On ne montre que LA prochaine cible pour guider pas à pas. */}
-            <View style={{ ...StyleSheet.absoluteFillObject, zIndex: 15 }} pointerEvents="none">
+            <View style={{ ...StyleSheet.absoluteFill, zIndex: 15 }} pointerEvents="none">
                 {showTarget && <OrangeDot x={targetX} y={targetY} />}
             </View>
 
@@ -209,7 +209,7 @@ export default function CaptureGuideOverlay({
 // ═══════════════════════════════════════════════════════════════════════════
 const styles = StyleSheet.create({
     overlay: {
-        ...StyleSheet.absoluteFillObject,
+        ...StyleSheet.absoluteFill,
         zIndex: 10,
     },
 
@@ -300,7 +300,7 @@ const styles = StyleSheet.create({
     },
 
     flashOverlay: {
-        ...StyleSheet.absoluteFillObject,
+        ...StyleSheet.absoluteFill,
         backgroundColor: 'rgba(255,255,255,0.15)',
         zIndex: 30,
     },

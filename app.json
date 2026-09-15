@@ -67,7 +67,12 @@
         {
           "photosPermission": "Teleport 360° saves panoramas to your photo library."
         }
-      ]
+      ],
+      "expo-font",
+      "expo-sharing",
+      "expo-splash-screen",
+      "expo-status-bar",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true

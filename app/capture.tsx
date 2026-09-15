@@ -799,7 +799,7 @@ const styles = StyleSheet.create({
 
   // Caméra fullscreen — le viewfinder est affiché par CaptureGuideOverlay
   cameraWindow: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 1,
   },
   gradient: {
@@ -809,12 +809,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 40,
   },
   flash: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "#FFFFFF",
     zIndex: 20,
   },
   successIndicator: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     justifyContent: "center",
     alignItems: "center",
     zIndex: 21,
@@ -835,7 +835,7 @@ const styles = StyleSheet.create({
 
   // ── Row Transition ──
   rowTransition: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     justifyContent: "center",
     alignItems: "center",
     zIndex: 50,

@@ -16,11 +16,23 @@ type ThemeProps = {
 export type TextProps = ThemeProps & DefaultText['props'];
 export type ViewProps = ThemeProps & DefaultView['props'];
 
+/**
+ * Clés de Colors dont la valeur est une couleur simple.
+ *
+ * Colors contient aussi `gradient`, qui est un objet de tableaux : sans ce
+ * filtrage, useThemeColor peut renvoyer cet objet, que ni `color` ni
+ * `backgroundColor` n'acceptent.
+ */
+type ThemeColorName = {
+  [K in keyof typeof Colors.light & keyof typeof Colors.dark]:
+    (typeof Colors.light)[K] extends string ? K : never;
+}[keyof typeof Colors.light & keyof typeof Colors.dark];
+
 export function useThemeColor(
   props: { light?: string; dark?: string },
-  colorName: keyof typeof Colors.light & keyof typeof Colors.dark
-) {
-  const theme = useColorScheme() ?? 'light';
+  colorName: ThemeColorName
+): string {
+  const theme = useColorScheme();
   const colorFromProps = props[theme];
 
   if (colorFromProps) {
