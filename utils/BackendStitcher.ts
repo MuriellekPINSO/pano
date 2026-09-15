@@ -17,6 +17,7 @@
  * ============================================================================
  */
 
+import { File as FsFile } from 'expo-file-system';
 import * as FileSystem from 'expo-file-system/legacy';
 import { CapturePosition } from '@/constants/CaptureConfig';
 
@@ -97,8 +98,20 @@ export async function stitchOnBackend(
     onProgress?.('Upload des images...');
     const formData = new FormData();
 
-    // React Native ne sérialise pas les Blob en multipart : il faut lui passer
-    // directement { uri, name, type } et il lit le fichier depuis le disque.
+    // Forme attendue par le multipart d'Expo (SDK 57) : une partie doit être
+    // une chaîne, un Blob, ou un objet exposant bytes(). La forme React Native
+    // { uri, name, type } — nécessaire jusqu'au SDK 54 — est désormais refusée
+    // avec « Unsupported FormDataPart implementation »
+    // (cf. expo/src/winter/fetch/convertFormData.ts).
+    //
+    // Le patch FormData d'Expo transmet tel quel tout objet non-Blob, et le
+    // convertisseur lit ensuite `name` pour le filename, `type` pour le
+    // content-type, puis appelle bytes(). On fournit donc les trois
+    // explicitement plutôt que de déléguer à FsFile.name / FsFile.type :
+    //   - `name` porte la position de grille, que le backend relit pour
+    //     orienter la photo sur la sphère ;
+    //   - `type` est forcé car le backend ignore SILENCIEUSEMENT toute partie
+    //     dont le content-type n'est pas image/* (cf. main.py).
     let attached = 0;
     const skipped: string[] = [];
 
@@ -120,10 +133,11 @@ export async function stitchOnBackend(
         const roll = Number.isFinite(pos.roll) ? (pos.roll as number) : 0;
         const filename =
           `pos_${pos.id}_r${pos.row}_c${pos.col}_k${roll.toFixed(1)}.jpg`;
+        const source = new FsFile(pos.uri);
         formData.append('files', {
-          uri: pos.uri,
           name: filename,
           type: 'image/jpeg',
+          bytes: () => source.bytes(),
         } as any);
 
         attached += 1;
