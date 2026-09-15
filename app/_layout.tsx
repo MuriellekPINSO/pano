@@ -1,8 +1,10 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useFonts } from 'expo-font';
-import { Stack } from 'expo-router';
+// Depuis le SDK 56, expo-router embarque sa propre copie de react-navigation et
+// refuse de cohabiter avec @react-navigation/native. Les primitives de thème
+// sont réexportées ici — c'est la source à utiliser désormais.
+import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect, useState } from 'react';
 import 'react-native-reanimated';
